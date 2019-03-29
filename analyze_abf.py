@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 
 
 logger = logging.getLogger(__name__)
-logging.basicConfig(level=logging.INFO)
+logger.setLevel(logging.INFO)
 
 
 def smooth_data(data, window=2):
@@ -36,7 +36,7 @@ def smooth_data(data, window=2):
     return smoothed_data
 
 
-def fit_tophat(x, y):
+def fit_tophat(x, y, verify=False, max_fitting_passes=2):
     """
     Fit the x and y data to a tophat function, returning:
     base_level - the y-value inside the tophat
@@ -44,8 +44,12 @@ def fit_tophat(x, y):
     hat_mid - centre of the tophat
     hat_width - width of the tophat
 
+    Fitting will be repeated until the optimizer exits with success, or is run `max_fitting_passes` times
+
     :param x: iterable of x values
     :param y: corresponding iterable of y values
+    :param verify: Show a plot of the fit, blocking progress until it is dismissed
+    :param max_fitting_passes: max how many rounds of mimimzation of residuals to do.
     :return: (base_level, hat_level, hat_mid, hat_width)
     """
 
@@ -58,114 +62,108 @@ def fit_tophat(x, y):
     assert len(x) == len(y)  # There must be the same amount of x as y values
 
     # Chose initial guesses
-    base_level = y[0]
+    base_level = np.mean(y[0:100])
     hat_level = min(y) if (abs(min(y) - base_level) > abs(max(y) - base_level)) else max(y)
     hat_mid = x[len(x) // 2]  # centre of the trace
     hat_width = x[3 * len(x) // 4] - x[len(x) // 4]  # the middle half of the x-range (of data points, not values)
 
+    # Miminize the residuals. The second round is needed to get the base level right
     params = (base_level, hat_level, hat_mid, hat_width)
-    res = minimize(objective, params, args=(x, y), method='Nelder-Mead')
+    for _ in range(max_fitting_passes):
+        res = minimize(objective, params, args=(x, y), method='Nelder-Mead')
+        logger.debug('Optimizer message: {}'.format(res.message))
+        logger.debug('Optimizer status: {}'.format(res.status))
+        if res.status == 0:
+            break
+        params = res.x
+    else:
+        logger.warning('Optimizer did not finish fitting tophat successfully')
 
-    plt.figure(figsize=(8, 5))
-    # fig, ax = plt.subplots()
-    plt.plot(x, y)
-    #plt.plot(x, top_hat(x, base_level, hat_level, hat_mid, hat_width))
-    plt.plot(x, top_hat(x, *res.x))
-    print('base V: {}\ndrive V: {}\ndV: {}\nstart time: {}\nend time: {}'.format(
-        res.x[0], res.x[1], res.x[1] - res.x[0],res.x[2] - res.x[3]/2, res.x[2] + res.x[3]/2))
-    # plt.text(0.95, 0.95, 'text', fontsize=10, bbox=dict(facecolor='red', alpha=0.5),transform=ax.transAxes)
-    plt.show()
+    # print('base V: {}\ndrive V: {}\ndV: {}\nstart time: {}\nend time: {}\n'.format(
+    #     res.x[0], res.x[1], res.x[1] - res.x[0], res.x[2] - res.x[3] / 2, res.x[2] + res.x[3] / 2))
+
+    if verify:
+        plt.close('all')
+        plt.figure(figsize=(8, 5))
+        # fig, ax = plt.subplots()
+        plt.plot(x, y)
+        #plt.plot(x, top_hat(x, base_level, hat_level, hat_mid, hat_width))
+        plt.plot(x, top_hat(x, *res.x))
+        plt.show()
+
+    return res.x
 
 
-
-
-
-def find_edges(data, window=2, threshold=50000):
+def count_peaks(x, y, threshold=0, verify=False):
     """
-    Check slope of data in window, find instances where slope is greater than threshold
+    Count signficant spikes in y values above threshold, for some definition
+    of "significant".
 
-    :param data: (timestamp, data value)
-    :param window: half width of window for slope calculation
-    :param threshold: steepness of slope that counts as an edge
-    :return:
+    :param x: list of x values
+    :param y: list of y values
+    :param threshold: y threshold that neesd to be crossed to count as a peak
+    :param verify: If True, a plot showing peaks found will be shown and block progress
+    :return: list of (x, y) values of peaks at point of maximum y
     """
-    slopes = []
-    for idx, data_point in enumerate(data):
-        # if idx - window < 0 or idx + window > len(data):
-        #     logger.warning('Discarding data that cannot give slope, t={}'.format(data_point[0]))  # TODO fix level
-        #     continue
-        data_slice = data[idx - window: idx + window + 1]
-        t_values = [d[0] for d in data_slice]
-        data_values = [d[1] for d in data_slice]
-        timestamp = data_point[0]
+    in_peak = False
+    peak = []  # list of data points that are part of a peak
+    peaks = []  # list or peaks
+    for data_point in zip(x, y):
+        if in_peak:
+            if data_point[1] > threshold:
+                peak.append(data_point)
+            else:
+                in_peak = False
+                peaks.append(peak)
+        elif data_point[1] > threshold:
+            in_peak = True
+            peak = [data_point]
 
-        slope = np.linalg.lstsq(list(zip(t_values, np.ones(len(t_values)))), data_values, rcond=None)[0][0]
-        slopes.append((timestamp, slope))
-        # if idx % 100 == 0:
-        #     print(timestamp, slope)
-        if abs(slope) > threshold:
-            print(timestamp, slope)
+    # print([peak[0] for peak in peaks])
+    # if len(peaks) > 0:
+    #     print([max(peak, key=lambda d: d[1]) for peak in peaks])
+    # else:
+    #     print('No peaks')
+    # print(len(peaks))
 
-    print(max([s[1] for s in slopes]))
-    print(min([s[1] for s in slopes]))
+    maximums = [max(peak, key=lambda d: d[1]) for peak in peaks]
+
+    if verify:
+        plt.close(fig='all')  # Make sure there are no unwanted figures
+        plt.figure(figsize=(16, 10))
+        plt.plot(x, y)
+        for m in maximums:
+            plt.axvline(x=m[0], color='red')
+        plt.show()
+
+    return maximums
 
 
 if __name__ == '__main__':
-    abf = ABF('.\\test\\KG173_02_01_19_0075.abf')
+    filename = '.\\test\\KG173_02_01_19_0075.abf'
+    abf = ABF(filename)
     # input: sweepY, channel=1
     # output: sweepY, channel=0
     # time: sweepX?
+    # print(dir(abf))
+    # print(abf.sweepList)
+    logger.info(dir(abf))
+    logger.info('Filename: {}'.format(filename))
+    logger.info('File contains {} sweeps'.format(abf.sweepCount))
+
+    for sweep_num in abf.sweepList:
+        logger.info('Sweep number {} has {} data points'.format(sweep_num, len(abf.sweepY)))
+        abf.setSweep(sweep_num, channel=1)
+        drive_signal = abf.sweepY
+
+        abf.setSweep(sweep_num, channel=0)
+        response_signal = abf.sweepY
+
+        time = abf.sweepX
+
+        base_level, hat_level, hat_mid, hat_width = fit_tophat(time, drive_signal)
+        actions_potentials = count_peaks(time, response_signal)
+        print('dV={}, AP count: {}'.format(hat_level - base_level, len(actions_potentials)))
 
 
-
-    sweeps = abf.sweepCount
-    logger.info(sweeps)
-    abf.setSweep(10, channel=1)
-    # print(abf.data[0])
-    # for c in [0, 1]:
-    #     for i, d in enumerate(abf.data[c]):
-    #         if i % 10000 == 0:
-    #             print(d)
-
-    logger.info('{}, {}'.format(len(abf.sweepX), abf.sweepX))
-
-    abf.setSweep(10, channel=1)
-    input = abf.sweepY
-
-    abf.setSweep(10, channel=0)
-    output = abf.sweepY
-
-    time = abf.sweepX
-
-    fit_tophat(time, input)
-    exit(0)
-
-    data = list(zip(time, output, input))
-    smoothed_data = smooth_data(data, window=2)
-
-
-    fig, ax1 = plt.subplots()
-
-    color = 'tab:red'
-    ax1.set_xlabel('time (s)')
-    ax1.set_ylabel('output', color=color)
-    ax1.plot([d[0] for d in smoothed_data], [d[1] for d in smoothed_data], color=color)
-    ax1.tick_params(axis='y', labelcolor=color)
-
-    ax2 = ax1.twinx()  # instantiate a second axes that shares the same x-axis
-
-    color = 'tab:blue'
-    ax2.set_ylabel('input', color=color)  # we already handled the x-label with ax1
-    abf.setSweep(10, channel=1)
-    ax2.plot([d[0] for d in smoothed_data], [d[2] for d in smoothed_data], color=color)
-    ax2.tick_params(axis='y', labelcolor=color)
-
-    fig.tight_layout()  # otherwise the right y-label is slightly clipped
-    plt.show()
-
-    #smoothed_data = smooth_data(data)
-    #find_edges([(d[0], d[2]) for d in smoothed_data])
-
-    # for i in range(100):
-    #     print(smoothed_data[i], data[i])
 
