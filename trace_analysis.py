@@ -2,9 +2,28 @@ from scipy.optimize import minimize
 import matplotlib.pyplot as plt
 import numpy as np
 import logging
+import os.path
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+VERIFICATION_DIR = 'verification'
+
+def verify_offline(plot, filename, verification_dir=VERIFICATION_DIR):
+    """
+    Write a plot to disk showing output of trace analysis for verification.
+    The file will be output to verification/filename
+
+    :param plot: a matplotlib pyplot
+    :param filename: filename of verification file
+    :return: None
+    """
+    if not os.path.isdir(verification_dir):
+        os.mkdir(verification_dir)
+
+    filepath = os.path.join(verification_dir, filename)
+    logger.info('Saving verification plot to {}'.format(filepath))
+    plot.savefig(filepath)
 
 
 def fit_tophat(x, y, verify=False, max_fitting_passes=2, verify_file='verfication.png'):
@@ -41,16 +60,20 @@ def fit_tophat(x, y, verify=False, max_fitting_passes=2, verify_file='verficatio
 
     # Miminize the residuals. Keep going until it completes or we hit the max passes
     params = (base_level, hat_level, hat_mid, hat_width)
-    for _ in range(max_fitting_passes):
+    for i, _ in enumerate(range(max_fitting_passes)):
         res = minimize(objective, params, args=(x, y), method='Nelder-Mead')
         logger.debug('Optimizer message: {}'.format(res.message))
         logger.debug('Optimizer status: {}'.format(res.status))
-        if res.status == 0:
-            break
         params = res.x
+        if res.status == 0:
+            logger.info('Tophat fit in {} passes. Height: {}, width: {}'.format(
+                i+1,
+                params[1] - params[0],
+                params[3]))
+            break
     else:
         # Executes if for-loop exits without a "break"
-        logger.warning('Optimizer did not finish fitting tophat successfully')
+        logger.warning('Optimizer did not finish fitting tophat successfully in {} passes'.format(i+1))
 
     # print('base V: {}\ndrive V: {}\ndV: {}\nstart time: {}\nend time: {}\n'.format(
     #     res.x[0], res.x[1], res.x[1] - res.x[0], res.x[2] - res.x[3] / 2, res.x[2] + res.x[3] / 2))
@@ -63,16 +86,14 @@ def fit_tophat(x, y, verify=False, max_fitting_passes=2, verify_file='verficatio
         # plt.plot(x, top_hat(x, base_level, hat_level, hat_mid, hat_width))
         plt.plot(x, top_hat(x, *res.x))
         if verify == 'offline':
-            'Saving verification file {}'.format(verify_file)
-            plt.savefig(verify_file)
+            verify_offline(plt, verify_file)
         else:
             plt.show()
-        plt.show()
 
     return res.x
 
 
-def count_peaks(x, y, threshold=0, verify=False, verify_file='verification.png'):
+def find_peaks(x, y, threshold=0, verify=False, verify_file='verification.png'):
     """
     Count signficant spikes in y values above threshold, for some definition
     of "significant". This is a very naive approach - any time the trace goes
@@ -87,7 +108,7 @@ def count_peaks(x, y, threshold=0, verify=False, verify_file='verification.png')
     :param verify_file: name of file for offline verification
     :return: list of (x, y) values of peaks at point of maximum y
     """
-    logger.info('Peak threshold is {}'.format(threshold))
+    logger.debug('Peak threshold is {}'.format(threshold))
 
     in_peak = False
     peak = []  # list of data points that are part of a peak
@@ -119,9 +140,9 @@ def count_peaks(x, y, threshold=0, verify=False, verify_file='verification.png')
         for m in maximums:
             plt.axvline(x=m[0], color='red')
         if verify == 'offline':
-            logger.info('Saving verification file {}'.format(verify_file))
-            plt.savefig(verify_file)
+            verify_offline(plt, verify_file)
         else:
             plt.show()
 
+    logger.info('Found {} peaks'.format(len(maximums)))
     return maximums
