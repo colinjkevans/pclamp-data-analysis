@@ -96,7 +96,14 @@ if __name__ == '__main__':
             time = abf.sweepX
 
             base_level, hat_level, hat_mid, hat_width = fit_tophat(time, drive_signal)
-            actions_potentials = count_peaks(time, response_signal, threshold=AP_THRESHOLD)
+            actions_potentials = count_peaks(
+                time,
+                response_signal,
+                threshold=AP_THRESHOLD,
+                verify='offline',
+                verify_file='{}.png'.format(sweep_num)
+            )
+
             print('dV={}, AP count: {}'.format(hat_level - base_level, len(actions_potentials)))
 
 

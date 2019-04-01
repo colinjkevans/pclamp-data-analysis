@@ -7,7 +7,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
-def fit_tophat(x, y, verify=False, max_fitting_passes=2):
+def fit_tophat(x, y, verify=False, max_fitting_passes=2, verify_file='verfication.png'):
     """
     Fit the x and y data to a tophat function, returning:
     base_level - the y-value inside the tophat
@@ -21,6 +21,7 @@ def fit_tophat(x, y, verify=False, max_fitting_passes=2):
     :param y: corresponding iterable of y values
     :param verify: Show a plot of the fit, blocking progress until it is dismissed
     :param max_fitting_passes: max how many rounds of mimimzation of residuals to do.
+    :param verify_file:
     :return: (base_level, hat_level, hat_mid, hat_width)
     """
 
@@ -61,20 +62,29 @@ def fit_tophat(x, y, verify=False, max_fitting_passes=2):
         plt.plot(x, y)
         # plt.plot(x, top_hat(x, base_level, hat_level, hat_mid, hat_width))
         plt.plot(x, top_hat(x, *res.x))
+        if verify == 'offline':
+            'Saving verification file {}'.format(verify_file)
+            plt.savefig(verify_file)
+        else:
+            plt.show()
         plt.show()
 
     return res.x
 
 
-def count_peaks(x, y, threshold=0, verify=False):
+def count_peaks(x, y, threshold=0, verify=False, verify_file='verification.png'):
     """
     Count signficant spikes in y values above threshold, for some definition
-    of "significant".
+    of "significant". This is a very naive approach - any time the trace goes
+    then below the threshold, find the highest value while it is above. That
+    is the peak. It works so far. scipy.signal.findpeaks may provide a more
+    robust approach if needed, using a peaks "prominence".
 
     :param x: list of x values
     :param y: list of y values
     :param threshold: y threshold that neesd to be crossed to count as a peak
-    :param verify: If True, a plot showing peaks found will be shown and block progress
+    :param verify: If True, a plot showing peaks found will be shown, or saved to file if verify=='offline'
+    :param verify_file: name of file for offline verification
     :return: list of (x, y) values of peaks at point of maximum y
     """
     logger.info('Peak threshold is {}'.format(threshold))
@@ -108,6 +118,10 @@ def count_peaks(x, y, threshold=0, verify=False):
         plt.plot(x, y)
         for m in maximums:
             plt.axvline(x=m[0], color='red')
-        plt.show()
+        if verify == 'offline':
+            logger.info('Saving verification file {}'.format(verify_file))
+            plt.savefig(verify_file)
+        else:
+            plt.show()
 
     return maximums
