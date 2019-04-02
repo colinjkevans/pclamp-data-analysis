@@ -5,12 +5,14 @@ import logging
 import os.path
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.ERROR)
 
 VERIFICATION_DIR = 'verification'
 
+
 def verify_offline(plot, filename, verification_dir=VERIFICATION_DIR):
     """
+    TODO move this into Sweep class?
     Write a plot to disk showing output of trace analysis for verification.
     The file will be output to verification/filename
 
@@ -146,3 +148,14 @@ def find_peaks(x, y, threshold=0, verify=False, verify_file='verification.png'):
 
     logger.info('Found {} peaks'.format(len(maximums)))
     return maximums
+
+
+def get_derivative(y, x):
+    """
+    Return the numerical derivatice of the data dy/dx
+    :param y: y values list
+    :param x: x values list
+    :return: dy/dx
+    """
+    return np.gradient(y, x)
+
