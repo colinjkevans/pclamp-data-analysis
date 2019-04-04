@@ -2,6 +2,7 @@ import os
 import logging
 from pyabf import ABF
 import matplotlib.pyplot as plt
+import numpy as np
 
 from trace_analysis import fit_tophat, find_peaks, get_derivative
 from config import ABF_LOCATION, AP_THRESHOLD
@@ -15,7 +16,7 @@ EXPERIMENT_TYPES = [
 ]
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 
 
 class Sweep(object):
@@ -56,6 +57,9 @@ class Sweep(object):
         self.sweep_name = sweep_name
         self.analysis_cache = {}  #TODO replace this with functools.lru_cache
 
+        logger.info('{} input units {}'.format(sweep_name, input_signal_units))
+        logger.info('{} output units {}'.format(sweep_name, output_signal_units))
+
         # TODO cache results of analyses already completed
 
     def __str__(self):
@@ -66,7 +70,7 @@ class Sweep(object):
         """
         Fit a tophat function to the input signal and cache the result
 
-        :return:
+        :return: (base_level, hat_level, hat_mid, hat_width)
         """
         if 'fit_input_tophat' in self.analysis_cache:
             logger.info('Found tophat params in cache')
@@ -135,6 +139,18 @@ class Sweep(object):
         self.analysis_cache['get_output_second_derivative'] = d2V_dt2
         return d2V_dt2
 
+    def show_plot(self):
+        """
+        Plot input vs time and output vs time on overlapping axes
+        :return: None
+        """
+        fig, ax1 = plt.subplots()
+        ax1.plot(self.time_steps, self.input_signal, color='red')
+        ax2 = ax1.twinx()
+        ax2.plot(self.time_steps, self.output_signal)
+
+        plt.show()
+
 
 class ExperimentData(object):
     """The set of traces in one abf file (a colloquial, not mathematical set)"""
@@ -147,6 +163,7 @@ class ExperimentData(object):
         self.abf = abf
         self.filename = os.path.basename(abf.abfFilePath)
         self.sweep_count = abf.sweepCount
+        logger.info('{} sweeps in {}'.format(self.sweep_count, self.filename))
 
         # Extract all the sweeps into
         self.sweeps = []
@@ -178,31 +195,77 @@ class ExperimentData(object):
             self.filename, self.sweep_count, self.experiment_type
         ))
 
-    def show_traces(self, sweep_num):
-        """
-        Plot input and response on same chart
-
-        :param sweep:
-        :return:
-        """
-        fig, ax1 = plt.subplots()
-        ax1.plot(self.sweeps[sweep_num].time_steps, self.sweeps[sweep_num].input_signal, color='red')
-        ax2 = ax1.twinx()
-        ax2.plot(self.sweeps[sweep_num].time_steps, self.sweeps[sweep_num].output_signal)
-
-        plt.show()
-
 
 class VCTestData(ExperimentData):
     """Functions to get relevant metrics for 'VC test' experiments"""
     def get_input_resistance(self):
-        raise NotImplementedError
+        """
+        Input resistance: calculate using change in steady state current
+        in response to small hyperpolarizing voltage step
+
+        :return:
+        """
+        resistances = []
+        for sweep in self.sweeps:
+            voltage_base, applied_voltage, voltage_mid, voltage_width = \
+                sweep.fit_input_tophat()  # Voltage base is should always be ~0
+            voltage_start = voltage_mid - voltage_width / 2
+            logger.info('Current starts at t={}'.format(voltage_start))
+            voltage_end = voltage_mid + voltage_width / 2
+            start_idx = None
+            end_idx = None
+            for idx, t in enumerate(sweep.time_steps):
+                if t > voltage_start and start_idx is None:
+                    start_idx = idx
+                if t > voltage_end and end_idx is None:
+                    end_idx = idx
+
+            # Measure current for the middle half of the driven part of the sweep
+            logger.info('Driven slice is {} to {}'.format(start_idx, end_idx))
+            measurement_slice_start = start_idx + (end_idx - start_idx) // 4
+            measurement_slice_end = start_idx + 3 * (end_idx - start_idx) // 4
+
+            mean_current_in_measurement_slice = np.mean(
+                sweep.output_signal[measurement_slice_start: measurement_slice_end]
+            )
+
+            # Measure current for the middle half post drive part of the sweep
+            last_idx = len(sweep.input_signal) - 1
+            resting_slice_start = end_idx + (last_idx - end_idx) // 4
+            resting_slice_end = end_idx + 3 * (last_idx - end_idx) // 4
+
+            mean_current_in_resting_slice = np.mean(
+                sweep.output_signal[resting_slice_start: resting_slice_end]
+            )
+
+            logger.info('Applied voltage: {} {}'.format(
+                applied_voltage, sweep.input_signal_units))
+            logger.info('Mean driven current: {} {}'.format(
+                mean_current_in_measurement_slice, sweep.output_signal_units))
+            logger.info('Resting current is: {} {}'.format(
+                mean_current_in_resting_slice, sweep.input_signal_units))
+
+            change_in_current = mean_current_in_measurement_slice - mean_current_in_resting_slice
+            resistance = applied_voltage / change_in_current
+            resistances.append(resistance)
+
+        return resistances
 
 
 class CurrentClampGapFreeData(ExperimentData):
     """Functions to get relevant metrics for 'current clamp gap free' experiments"""
     def get_resting_potential(self):
-        raise NotImplementedError
+        """
+        Resting potential is in the output trace. Just average it. There should
+        be jsut one trace
+
+        :return:
+        """
+        assert len(self.sweeps) == 1
+
+        return np.mean(self.sweeps[0].output_signal)
+
+
 
 class CurrentStepsData(ExperimentData):
     """Functions to get relevant metrics for 'current steps' experiments"""
@@ -246,10 +309,6 @@ class CurrentStepsData(ExperimentData):
         for sweep in self.sweeps:
             peaks_by_sweep.append(sweep.find_output_peaks())
 
-        # TODO this is probably the wrong sort.
-        # TODO - Sweeps with the same number of peaks will be randomly ordered.
-        # TODO - Also can you have less voltage with more peaks?
-        peaks_by_sweep.sort(key=lambda peaks: len(peaks))
         for peaks in peaks_by_sweep:
             if len(peaks) >= 11:
                 isi_1 = peaks[1][0] - peaks[0][0]
@@ -321,20 +380,20 @@ class CurrentStepsData(ExperimentData):
 
         return 1/minimum_peak_interval
 
-    def get_ap_threshold_1(self):
+    def _get_ap_threshold_1_details(self):
         """
         AP threshold #1:
         for first spike obtained at suprathreshold current injection, the
         voltage at which first derivative (dV/dt) of the AP waveform reaches
         10V/s = 10000mV/s
 
-        :return:
+        :return: sweep number of threshold measurement, V or threshold, t of threshold
         """
         gradient_threshold = 10000  # V/s  TODO handle units properly
 
         # iterate through sweeps and peaks until we find the first peak. We will
         # return a result based on that peak.
-        for sweep in self.sweeps:
+        for sweep_num, sweep in enumerate(self.sweeps):
             for peak in sweep.find_output_peaks():
                 dVdt = sweep.get_output_derivative()
                 for idx, gradient in enumerate(dVdt):
@@ -342,7 +401,22 @@ class CurrentStepsData(ExperimentData):
                         # return the value of the voltage at the timestamp that
                         # we cross the threshold in gradient
                         logger.info('Found AP threshold 1 in {}'.format(sweep.sweep_name))
-                        return sweep.output_signal[idx]
+                        return sweep_num, sweep.output_signal[idx], sweep.time_steps[idx]
+
+    def _get_ap_threshold_1_time(self):
+        """
+
+
+        :return:
+        """
+        return self._get_ap_threshold_1_details()[2]
+
+    def get_ap_threshold_1(self):
+        """
+
+        :return:
+        """
+        return self._get_ap_threshold_1_details()[1]
 
     def get_ap_threshold_2(self):
         """
@@ -358,38 +432,44 @@ class CurrentStepsData(ExperimentData):
 
         :return:
         """
-        for sweep in self.sweeps:
-            for peak in sweep.find_output_peaks():
-                d2V_dt2 = sweep.get_output_second_derivative()
-                d2V_dt2_peaks = find_peaks(sweep.time_steps, d2V_dt2)
-                max_first_d2V_dt2_peak = d2V_dt2_peaks[0][1]
-                for idx, d2V_dt2_value in enumerate(d2V_dt2):
-                    if d2V_dt2_value > 0.05 * max_first_d2V_dt2_peak:
-                        logger.info('Found AP threshold 2 in {}'.format(sweep.sweep_name))
-                        logger.info('Found AP threshold 2 at t={}'.format(sweep.time_steps[idx]))
-                        return sweep.output_signal[idx]
+        raise NotImplementedError
+        # for sweep in self.sweeps:
+        #     for peak in sweep.find_output_peaks():
+        #         d2V_dt2 = sweep.get_output_second_derivative()
+        #         d2V_dt2_peaks = find_peaks(sweep.time_steps, d2V_dt2)
+        #         max_first_d2V_dt2_peak = d2V_dt2_peaks[0][1]
+        #         for idx, d2V_dt2_value in enumerate(d2V_dt2):
+        #             if d2V_dt2_value > 0.05 * max_first_d2V_dt2_peak:
+        #                 logger.info('Found AP threshold 2 in {}'.format(sweep.sweep_name))
+        #                 logger.info('Found AP threshold 2 at t={}'.format(sweep.time_steps[idx]))
+        #                 return sweep.output_signal[idx]
 
     def get_ap_rise_time(self):
         """
         AP rise time:
         for first spike obtained at suprathreshold current injection, time
-        from AP threshold to peak
-        # TODO which AP threshold?
+        from AP threshold 1 to peak
 
         :return:
         """
-        raise NotImplementedError
+        sweep_num, ap_threshold, ap_threshold_time = self._get_ap_threshold_1_details()
+        sweep = self.sweeps[sweep_num]
+        ap_peak_time = sweep.find_output_peaks()[0][0]
+        return ap_peak_time - ap_threshold_time
 
     def get_ap_amplitude(self):
         """
         AP amplitude:
         for first spike obtained at suprathreshold current injection, change
         in mV from AP threshold #1 to peak
-        # TODO which AP threshold?
 
         :return:
         """
-        raise NotImplementedError
+        sweep_num, ap_threshold_voltage, ap_threshold_time = \
+            self._get_ap_threshold_1_details()
+        sweep = self.sweeps[sweep_num]
+        ap_peak_voltage = sweep.find_output_peaks()[0][1]
+        return ap_peak_voltage - ap_threshold_voltage
 
     def get_ap_half_width(self):
         """
@@ -397,19 +477,17 @@ class CurrentStepsData(ExperimentData):
         for first spike obtained at suprathreshold current injection, width
         of the AP (in ms) at 1/2 maximal amplitude, using AP threshold #1 and
         AP amplitude
-        # TODO why does threshold matter?
 
         :return:
         """
         for sweep in self.sweeps:
             for peak in sweep.find_output_peaks():
                 logger.info('Found first peak in {}'.format(sweep.sweep_name))
-                half_peak_voltage = 0.5 * peak[1]
+                half_peak_voltage = 0.5 * (peak[1] - self.get_ap_threshold_1())
                 peak_time = peak[0]
                 peak_index = list(sweep.time_steps).index(peak_time)
                 logger.info('Peak time is {}'.format(peak_time))
                 logger.info('Peak is at data point number {}'.format(peak_index))
-
 
                 voltage_at_time = dict(zip(sweep.time_steps, sweep.output_signal))
                 # Iterate back through the data to find the half peak time
@@ -434,9 +512,43 @@ class CurrentStepsData(ExperimentData):
         calculate using slope of the linear fit to the plot of the V-I
         relation from subthreshold current steps at/around resting potential
 
+        # TODO do this from the last sweep before threshold?
+        # TODO Average gradient for first 20ms?
+        # TODO What is resting potential?
+        # TODO Need to discuss this one.
+
         :return:
         """
         raise NotImplementedError
+        # Find the sweep which elicits the first AP
+        for sweep_num, sweep in enumerate(self.sweeps):
+            if len(sweep.find_output_peaks()) > 0:
+                first_suprathreshold_sweep = sweep_num
+                break
+
+        last_subthreshold_sweep_num = first_suprathreshold_sweep - 1
+
+        # Find time of current step in last subthreshold peak
+        last_subthreshold_sweep = self.sweeps[last_subthreshold_sweep_num]
+        tophat_params = last_subthreshold_sweep.fit_input_tophat()
+        current_step_time = tophat_params[2] - tophat_params[3] / 2
+        drive_current = tophat_params[1]
+
+        # Get the derivative of the output function
+        dV_dt = last_subthreshold_sweep.get_output_derivative()
+
+    def plot_v_vs_i(self, sweep_num):
+        """
+        Just for testing
+
+        :param sweep_num:
+        :return:
+        """
+        sweep = self.sweeps[sweep_num]
+        fig, ax1 = plt.subplots()
+        ax1.plot(sweep.output_signal, sweep.input_signal)
+        plt.show()
+
 
 
 def get_file_list(abf_location):
@@ -482,8 +594,13 @@ if __name__ == '__main__':
         #     exec('print(abf.{})'.format(field))
 
         ############################   CURRENT STEPS
-        # experiment = CurrentStepsData(abf, EXPERIMENT_TYPE_CURRENT_STEPS)
+        experiment = CurrentStepsData(abf)
+        for i, sweep in enumerate(experiment.sweeps):
+            if len(sweep.find_output_peaks()) == 0:
+                experiment.plot_v_vs_i(i)
 
+
+        #
         # rheobase = experiment.get_rheobase()
         # print('Rheobase of {} is {}mV'.format(experiment.filename, rheobase))
         #
@@ -492,22 +609,48 @@ if __name__ == '__main__':
         #
         # max_ssff = experiment.get_max_steady_state_firing_frequency()
         # print('Max steady state firing frequency is {}'.format(max_ssff))
-
+        #
         # max_iff = experiment.get_max_instantaneous_firing_frequency()
         # print('Max instantaneous firing frequency is {}'.format(max_iff))
-
+        #
         # ap_threshold_1 = experiment.get_ap_threshold_1()
         # print('AP threshold 1 is {}'.format(ap_threshold_1))
-
-        # ap_threshold_2 = experiment.get_ap_threshold_2()
-        # print('AP threshold 2 is {}'.format(ap_threshold_2))
-
+        #
+        # try:
+        #     ap_threshold_2 = experiment.get_ap_threshold_2()
+        #     print('AP threshold 2 is {}'.format(ap_threshold_2))
+        # except NotImplementedError:
+        #     logger.warning("I don't know how to do that")
+        #
         # ap_half_width = experiment.get_ap_half_width()
         # print('AP half width is {}'.format(ap_half_width))
         ############################   \CURRENT STEPS
 
         ############################   VC TEST
-        experiment = VCTestData(abf)
-        experiment.show_traces(0)
-
+        # experiment = VCTestData(abf)
+        # print('time units: {}, input units: {}, output units: {}'.format(
+        #     experiment.sweeps[0].time_steps_units,
+        #     experiment.sweeps[0].input_signal_units,
+        #     experiment.sweeps[0].output_signal_units
+        # ))
+        # input_resistances = experiment.get_input_resistance()
+        # print('Input resistances: {}'.format(input_resistances))
+        # print('Input resistance is {} {}/{}'.format(
+        #     np.mean(input_resistances),
+        #     experiment.sweeps[0].input_signal_units,
+        #     experiment.sweeps[0].output_signal_units
+        # ))
+        # print('mV / pA is GOhm')
         ############################   \VC TEST
+
+        ############################   current clamp gap free
+        # experiment = CurrentClampGapFreeData(abf)
+        # resting_potential = experiment.get_resting_potential()
+        # print('Resting potential is: {} {}'.format(
+        #     resting_potential, experiment.sweeps[0].output_signal_units))
+        # for sweep in experiment.sweeps:
+        #     sweep.show_plot()
+        #     print('Input: {}'.format(sweep.input_signal_units))
+        #     print('Output: {}'.format(sweep.output_signal_units))
+
+        ############################   /current clamp gap free

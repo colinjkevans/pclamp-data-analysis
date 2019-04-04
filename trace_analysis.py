@@ -5,7 +5,7 @@ import logging
 import os.path
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.ERROR)
+logger.setLevel(logging.INFO)
 
 VERIFICATION_DIR = 'verification'
 
@@ -36,7 +36,8 @@ def fit_tophat(x, y, verify=False, max_fitting_passes=2, verify_file='verficatio
     hat_mid - centre of the tophat
     hat_width - width of the tophat
 
-    Fitting will be repeated until the optimizer exits with success, or is run `max_fitting_passes` times
+    Fitting will be repeated until the optimizer exits with success, or is
+    run `max_fitting_passes` times
 
     :param x: iterable of x values
     :param y: corresponding iterable of y values
@@ -57,8 +58,11 @@ def fit_tophat(x, y, verify=False, max_fitting_passes=2, verify_file='verficatio
     # Chose initial guesses
     base_level = np.mean(y[0:100])
     hat_level = min(y) if (abs(min(y) - base_level) > abs(max(y) - base_level)) else max(y)
-    hat_mid = x[len(x) // 2]  # centre of the trace
-    hat_width = x[3 * len(x) // 4] - x[len(x) // 4]  # the middle half of the x-range (of data points, not values)
+    # hat_mid = x[len(x) // 2]  # centre of the trace
+    hat_mid = x[list(y).index(hat_level)]  # x value of hat_mid estimate
+    # the middle half of the x-range (of data points not values), or hat_mid,
+    # whichever is less
+    hat_width = min(x[3 * len(x) // 4] - x[len(x) // 4], hat_mid)
 
     # Miminize the residuals. Keep going until it completes or we hit the max passes
     params = (base_level, hat_level, hat_mid, hat_width)
