@@ -16,7 +16,7 @@ EXPERIMENT_TYPES = [
 ]
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.ERROR)
 
 
 class Sweep(object):
@@ -595,35 +595,35 @@ if __name__ == '__main__':
 
         ############################   CURRENT STEPS
         experiment = CurrentStepsData(abf)
-        for i, sweep in enumerate(experiment.sweeps):
-            if len(sweep.find_output_peaks()) == 0:
-                experiment.plot_v_vs_i(i)
+        # for i, sweep in enumerate(experiment.sweeps):
+        #     if len(sweep.find_output_peaks()) == 0:
+        #         experiment.plot_v_vs_i(i)
 
 
-        #
-        # rheobase = experiment.get_rheobase()
-        # print('Rheobase of {} is {}mV'.format(experiment.filename, rheobase))
-        #
-        # sfa = experiment.get_spike_frequency_adaptation()
-        # print('SFA is {}'.format(sfa))
-        #
+
+        rheobase = experiment.get_rheobase()
+        print('Rheobase of {} is {}mV'.format(experiment.filename, rheobase))
+
+        sfa = experiment.get_spike_frequency_adaptation()
+        print('SFA is {}'.format(sfa))
+
         # max_ssff = experiment.get_max_steady_state_firing_frequency()
         # print('Max steady state firing frequency is {}'.format(max_ssff))
-        #
-        # max_iff = experiment.get_max_instantaneous_firing_frequency()
-        # print('Max instantaneous firing frequency is {}'.format(max_iff))
-        #
-        # ap_threshold_1 = experiment.get_ap_threshold_1()
-        # print('AP threshold 1 is {}'.format(ap_threshold_1))
-        #
-        # try:
-        #     ap_threshold_2 = experiment.get_ap_threshold_2()
-        #     print('AP threshold 2 is {}'.format(ap_threshold_2))
-        # except NotImplementedError:
-        #     logger.warning("I don't know how to do that")
-        #
-        # ap_half_width = experiment.get_ap_half_width()
-        # print('AP half width is {}'.format(ap_half_width))
+
+        max_iff = experiment.get_max_instantaneous_firing_frequency()
+        print('Max instantaneous firing frequency is {}'.format(max_iff))
+
+        ap_threshold_1 = experiment.get_ap_threshold_1()
+        print('AP threshold 1 is {}'.format(ap_threshold_1))
+
+        try:
+            ap_threshold_2 = experiment.get_ap_threshold_2()
+            print('AP threshold 2 is {}'.format(ap_threshold_2))
+        except NotImplementedError:
+            logger.warning("I don't know how to do that")
+
+        ap_half_width = experiment.get_ap_half_width()
+        print('AP half width is {}'.format(ap_half_width))
         ############################   \CURRENT STEPS
 
         ############################   VC TEST
