@@ -42,6 +42,9 @@ def fit_tophat(x, y, verify=False, verify_file='verfication.png'):
     :param verify_file:
     :return: (base_level, hat_level, hat_mid, hat_width)
     """
+    # TODO Try to spot close to zero height tophats, which may confuse the algorithm
+    # TODO Change hat mid/hat width, to had start/hat end.
+
     def top_hat(x, base_level, hat_level, hat_mid, hat_width):
         return np.where((hat_mid - hat_width / 2.0 < x) & (x < hat_mid + hat_width / 2.0), hat_level, base_level)
 

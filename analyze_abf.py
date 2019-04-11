@@ -83,6 +83,8 @@ class Sweep(object):
             verify_file=verify_file)
         self.analysis_cache['fit_input_tophat'] = tophat_params
 
+        # TODO Try to spot zero height tophats, and return something sensible
+
         return tophat_params
 
     def find_output_peaks(self, threshold=0, verify=False, verify_file='verification.png'):
@@ -108,9 +110,9 @@ class Sweep(object):
 
         return peaks
 
-    def get_output_derivative(self):
+    def get_output_derivative(self, verify=False):
         """
-        return dV/dt values of output signal. List indices correspond to
+        return d/dt values of output signal. List indices correspond to
         self.time_steps
 
         :return: list of dV/dt values
@@ -119,9 +121,20 @@ class Sweep(object):
             logger.info('Found output derivative in cache')
             return self.analysis_cache['get_output_derivative']
 
-        dV_dt = get_derivative(self.output_signal, self.time_steps)
-        self.analysis_cache['get_output_derivative'] = dV_dt
-        return dV_dt
+        d_dt_output = get_derivative(self.output_signal, self.time_steps)
+        self.analysis_cache['get_output_derivative'] = d_dt_output
+
+        if verify:
+            plt.close('all')
+            plt.figure(figsize=(16, 10))
+            fig, ax1 = plt.subplots()
+            ax1.plot(self.time_steps, self.output_signal)
+
+            ax2 = ax1.twinx()
+            ax2.plot(self.time_steps, d_dt_output)
+            plt.show()
+
+        return d_dt_output
 
     def get_output_second_derivative(self):
         """
@@ -134,9 +147,9 @@ class Sweep(object):
             logger.info('Found output second derivative in cache')
             return self.analysis_cache['get_output_second_derivative']
 
-        d2V_dt2 = get_derivative(self.get_output_derivative(), self.time_steps)
-        self.analysis_cache['get_output_second_derivative'] = d2V_dt2
-        return d2V_dt2
+        d2_dt2_output = get_derivative(self.get_output_derivative(), self.time_steps)
+        self.analysis_cache['get_output_second_derivative'] = d2_dt2_output
+        return d2_dt2_output
 
     def show_plot(self):
         """
@@ -265,7 +278,6 @@ class CurrentClampGapFreeData(ExperimentData):
         return np.mean(self.sweeps[0].output_signal)
 
 
-
 class CurrentStepsData(ExperimentData):
     """Functions to get relevant metrics for 'current steps' experiments"""
     def get_current_step_sizes(self):
@@ -296,11 +308,30 @@ class CurrentStepsData(ExperimentData):
 
         return ap_counts
 
-    def get_rheobase(self):
+    def get_rheobase(self, verify=False):
         """
         Get the rheobase - the minimum voltage that elicits at least one peak
         :return:
         """
+        def verification_plot():
+            plt.figure(figsize=(32, 20))
+            plt.close('all')
+            for i, sweep in enumerate(self.sweeps):
+                offset = 140 * i  # TODO Derive offset from data
+                plt.plot(sweep.time_steps, sweep.output_signal + offset)
+                text_height = sweep.output_signal[0] + offset
+                plt.text(0, text_height, peaks_at_voltage[i][1], fontsize=8)
+                if i == rheobase_sweep_num:
+                    plt.text(
+                        .95,
+                        text_height,
+                        'Rheobase from this sweep',
+                        horizontalalignment='right'
+                    )
+
+            plt.gca().get_yaxis().set_visible(False)
+            plt.show()
+
         drive_voltages = []
         peak_count = []
         for sweep in self.sweeps:
@@ -312,13 +343,22 @@ class CurrentStepsData(ExperimentData):
             peak_count.append(len(sweep.find_output_peaks()))
 
         peaks_at_voltage = list(zip(peak_count, drive_voltages))
-        peaks_at_voltage.sort(key=lambda x: x[1])  # Sort by voltage
-        for sweep in peaks_at_voltage:  # Iterate over sorted sweeps
+
+        for i, sweep in enumerate(peaks_at_voltage):
             if sweep[0] > 0:
-                return sweep[1]  # return voltage of fist sweep with a peak
+                rheobase = sweep[1]  # return voltage of fist sweep with a peak
+                rheobase_sweep_num = i
+                break
         else:
             logger.info('No sweep had a peak in this experiment')
-            return None  # return None if there are no APs in the experiment
+            # TODO Might be better to raise an exception
+            rheobase = None  # return None if there are no APs in the experiment
+            rheobase_sweep_num = None
+
+        if verify:
+            verification_plot()
+
+        return rheobase
 
     def get_spike_frequency_adaptation(self):
         """
@@ -375,6 +415,10 @@ class CurrentStepsData(ExperimentData):
             if not invalid_sweep:
                 frequency = len(peaks)/(peaks[-1][0] - peaks[0][0])
                 frequencies.append(frequency)
+
+        if len(frequencies) == 0:
+            logger.warning('No sweep had enough peaks to calculate a frequency')
+            return 0.0
 
         return max(frequencies)
 
@@ -497,7 +541,7 @@ class CurrentStepsData(ExperimentData):
         ap_peak_voltage = sweep.find_output_peaks()[0][1]
         return ap_peak_voltage - ap_threshold_voltage
 
-    def get_ap_half_width(self):
+    def get_ap_half_width(self, verify=False):
         """
         AP half-width:
         for first spike obtained at suprathreshold current injection, width
@@ -506,31 +550,67 @@ class CurrentStepsData(ExperimentData):
 
         :return:
         """
+        def verification_plot():
+            plt.close('all')
+            plot_slice_start_idx = peak_start_idx - 3 * (peak_end_idx - peak_start_idx)
+            plot_slice_end_idx = peak_end_idx + 5 * (peak_end_idx - peak_start_idx)
+            plt.plot(
+                sweep.time_steps[plot_slice_start_idx: plot_slice_end_idx],
+                sweep.output_signal[plot_slice_start_idx: plot_slice_end_idx]
+            )
+
+            # TODO add text for threshold, peak, half, horizontal lines
+            plt.axhline(threshold_amp, color='b')
+            plt.axhline(sweep.output_signal[peak_idx], color='b')
+
+            half_width_amp = 0.5 * (sweep.output_signal[peak_idx] + threshold_amp)
+            plt.axhline(half_width_amp, color='r')
+
+            plt.axvline(sweep.time_steps[peak_start_idx])
+            plt.axvline(sweep.time_steps[peak_end_idx])
+
+            plt.text(
+                sweep.time_steps[plot_slice_end_idx],
+                0.5 * (peak_amplitude + half_width_amp),
+                'AP half width ={:.2g}'.format(ap_half_width),
+                horizontalalignment='right',
+                verticalalignment='top')
+
+            plt.show()
+
         for sweep in self.sweeps:
             for peak in sweep.find_output_peaks():
                 logger.info('Found first peak in {}'.format(sweep.sweep_name))
-                half_peak_voltage = 0.5 * (peak[1] - self.get_ap_threshold_1())
-                peak_time = peak[0]
-                peak_index = list(sweep.time_steps).index(peak_time)
+                threshold_amp = self.get_ap_threshold_1()
+                peak_time, peak_amplitude = peak
+                half_peak_voltage = 0.5 * (peak_amplitude + threshold_amp)
+                peak_idx = list(sweep.time_steps).index(peak_time)
                 logger.info('Peak time is {}'.format(peak_time))
-                logger.info('Peak is at data point number {}'.format(peak_index))
+                logger.info('Peak is at data point number {}'.format(peak_idx))
 
                 voltage_at_time = dict(zip(sweep.time_steps, sweep.output_signal))
                 # Iterate back through the data to find the half peak time
-                for time_step in sweep.time_steps[peak_index::-1]:
+                for idx_diff, time_step in enumerate(sweep.time_steps[peak_idx::-1]):
                     if voltage_at_time[time_step] < half_peak_voltage:
                         logger.info('Found peak start at {}'.format(time_step))
                         peak_start = time_step
+                        peak_start_idx = peak_idx - idx_diff
                         break
 
                 # Iterate forward through the data to find the half peak time
-                for time_step in sweep.time_steps[peak_index:]:
+                for idx_diff, time_step in enumerate(sweep.time_steps[peak_idx:]):
                     if voltage_at_time[time_step] < half_peak_voltage:
                         logger.info('Found peak end at {}'.format(time_step))
                         peak_end = time_step
+                        peak_end_idx = peak_idx + idx_diff
                         break
 
-                return peak_end - peak_start
+                ap_half_width = peak_end - peak_start
+
+                if verify:
+                    verification_plot()
+
+                return ap_half_width
 
     def get_input_resistance(self):
         """
@@ -621,30 +701,31 @@ if __name__ == '__main__':
         ############################   CURRENT STEPS
         experiment = CurrentStepsData(abf)
 
-        #
-        # rheobase = experiment.get_rheobase()
-        # print('Rheobase of {} is {}mV'.format(experiment.filename, rheobase))
-        #
-        # sfa = experiment.get_spike_frequency_adaptation()
-        # print('SFA is {}'.format(sfa))
-        #
-        # max_ssff = experiment.get_max_steady_state_firing_frequency()
-        # print('Max steady state firing frequency is {}'.format(max_ssff))
-        #
-        # max_iff = experiment.get_max_instantaneous_firing_frequency()
-        # print('Max instantaneous firing frequency is {}'.format(max_iff))
-        #
-        # ap_threshold_1 = experiment.get_ap_threshold_1()
-        # print('AP threshold 1 is {}'.format(ap_threshold_1))
-        #
-        # try:
-        #     ap_threshold_2 = experiment.get_ap_threshold_2()
-        #     print('AP threshold 2 is {}'.format(ap_threshold_2))
-        # except NotImplementedError:
-        #     logger.warning("I don't know how to do that")
-        #
-        # ap_half_width = experiment.get_ap_half_width()
-        # print('AP half width is {}'.format(ap_half_width))
+
+        rheobase = experiment.get_rheobase(verify=True)
+        print('Rheobase of {} is {}mV'.format(experiment.filename, rheobase))
+        exit()
+
+        sfa = experiment.get_spike_frequency_adaptation()
+        print('SFA is {}'.format(sfa))
+
+        max_ssff = experiment.get_max_steady_state_firing_frequency()
+        print('Max steady state firing frequency is {}'.format(max_ssff))
+
+        max_iff = experiment.get_max_instantaneous_firing_frequency()
+        print('Max instantaneous firing frequency is {}'.format(max_iff))
+
+        ap_threshold_1 = experiment.get_ap_threshold_1()
+        print('AP threshold 1 is {}'.format(ap_threshold_1))
+
+        try:
+            ap_threshold_2 = experiment.get_ap_threshold_2()
+            print('AP threshold 2 is {}'.format(ap_threshold_2))
+        except NotImplementedError:
+            logger.warning("I don't know how to do that")
+
+        ap_half_width = experiment.get_ap_half_width()
+        print('AP half width is {}'.format(ap_half_width))
         ############################   \CURRENT STEPS
 
         ############################   VC TEST
