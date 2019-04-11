@@ -320,13 +320,14 @@ class CurrentStepsData(ExperimentData):
                 offset = 140 * i  # TODO Derive offset from data
                 plt.plot(sweep.time_steps, sweep.output_signal + offset)
                 text_height = sweep.output_signal[0] + offset
-                plt.text(0, text_height, peaks_at_voltage[i][1], fontsize=8)
+                plt.text(0, text_height, '{:.0f}'.format(peaks_at_voltage[i][1]), fontsize=8)
                 if i == rheobase_sweep_num:
                     plt.text(
                         .95,
                         text_height,
                         'Rheobase from this sweep',
-                        horizontalalignment='right'
+                        horizontalalignment='right',
+                        fontsize=8
                     )
 
             plt.gca().get_yaxis().set_visible(False)

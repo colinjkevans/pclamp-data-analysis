@@ -1,5 +1,4 @@
 import os
-from collections import defaultdict
 from pyabf import ABF
 from analyze_abf import CurrentStepsData
 
