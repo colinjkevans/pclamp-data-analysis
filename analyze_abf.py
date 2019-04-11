@@ -66,7 +66,7 @@ class Sweep(object):
         return 'Data from a single sweep, containing {} data points'.format(len(self.time_steps))
 
     def fit_input_tophat(
-            self, verify=False, max_fitting_passes=2, verify_file='verfication.png'):
+            self, verify=False, verify_file='verfication.png'):
         """
         Fit a tophat function to the input signal and cache the result
 
@@ -80,7 +80,6 @@ class Sweep(object):
             self.time_steps,
             self.input_signal,
             verify=verify,
-            max_fitting_passes=max_fitting_passes,
             verify_file=verify_file)
         self.analysis_cache['fit_input_tophat'] = tophat_params
 
@@ -269,6 +268,33 @@ class CurrentClampGapFreeData(ExperimentData):
 
 class CurrentStepsData(ExperimentData):
     """Functions to get relevant metrics for 'current steps' experiments"""
+    def get_current_step_sizes(self):
+        """
+        Get a list of the step sizes of the driving current in the same order
+        as self.sweeps
+
+        :return: list of floats
+        """
+        step_sizes = []
+        for sweep in self.sweeps:
+            base_level, hat_level, hat_mid, hat_width = sweep.fit_input_tophat()
+            current_step = hat_level - base_level
+            step_sizes.append(current_step)
+
+        return step_sizes
+
+    def get_ap_counts(self):
+        """
+        Get a list of the number of action potentials in the output in the
+        same order as self.sweeps
+
+        :return: list of ints
+        """
+        ap_counts = []
+        for sweep in self.sweeps:
+            ap_counts.append(len(sweep.find_output_peaks()))
+
+        return ap_counts
 
     def get_rheobase(self):
         """
@@ -548,7 +574,6 @@ class CurrentStepsData(ExperimentData):
         fig, ax1 = plt.subplots()
         ax1.plot(sweep.output_signal, sweep.input_signal)
         plt.show()
-
 
 
 def get_file_list(abf_location):
