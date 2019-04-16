@@ -16,7 +16,7 @@ EXPERIMENT_TYPES = [
 ]
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.ERROR)
+logger.setLevel(logging.WARNING)
 
 
 class Sweep(object):
@@ -410,7 +410,7 @@ class CurrentStepsData(ExperimentData):
 
             for peak in peaks:
                 if peak[1] < 40:  # Fulfil amplitude > 40mV criterion
-                    logger.info('One of the peaks was too low')
+                    logger.warning('One of the peaks was too low')
                     invalid_sweep = True
 
             if not invalid_sweep:
