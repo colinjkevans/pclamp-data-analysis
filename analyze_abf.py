@@ -16,7 +16,7 @@ EXPERIMENT_TYPES = [
 ]
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.WARNING)
+logger.setLevel(logging.INFO)
 
 
 class Sweep(object):
@@ -386,7 +386,7 @@ class CurrentStepsData(ExperimentData):
             logger.info('Data had no sweeps with sustained firing')
             return None, None
 
-    def get_max_steady_state_firing_frequency(self):
+    def get_max_steady_state_firing_frequency(self, verify=False):
         """
          Max steady state firing frequency:
          max mean firing frequency in response to current injection with no
@@ -396,32 +396,68 @@ class CurrentStepsData(ExperimentData):
         # TODO do we have to check for "missing" peaks
         :return: frequency, inverse of timesteps units
         """
+        def verification_plot():
+            plt.figure(figsize=(32, 20))
+            plt.close('all')
+            for i, sweep in enumerate(self.sweeps):
+                offset = 140 * i  # TODO Derive offset from data
+                text_height = sweep.output_signal[0] + offset
+                plot_color = 'b'
+                if i == max_frequency_idx:
+                    max_freq_peaks = peaks_by_sweep[i]
+                    first_ap_time = max_freq_peaks[0][0]
+                    last_ap_time = max_freq_peaks[-1][0]
+                    time_diff = last_ap_time - first_ap_time
+                    plt.text(
+                        .95,
+                        text_height,
+                        'Max SSFF: {} APs in {:.2f}s = {:.0f}Hz'.format(
+                            len(max_freq_peaks), time_diff, max_frequency),
+                        horizontalalignment='right',
+                        fontsize=8
+                    )
+                    plt.axvline(first_ap_time)
+                    plt.axvline(last_ap_time)
+                    plot_color = 'r'
+                plt.plot(sweep.time_steps, sweep.output_signal + offset, color=plot_color)
+
+            plt.gca().get_yaxis().set_visible(False)
+            plt.show()
+
         peaks_by_sweep = []
         for sweep in self.sweeps:
             # Set threshold = 0 to fulfil "overshooting 0mV" criterion
             peaks_by_sweep.append(sweep.find_output_peaks(threshold=0))
 
-        frequencies = []
-        for peaks in peaks_by_sweep:
+        frequencies = {}  # {frequency: sweep_num, ... }
+        for i, peaks in enumerate(peaks_by_sweep):
             invalid_sweep = False
             if len(peaks) < 2:
-                logger.info('Not enough peaks in sweep to calculate a frequency')
+                logger.info('Not enough peaks in sweep {} to calculate a frequency'.format(i))
                 invalid_sweep = True
 
             for peak in peaks:
                 if peak[1] < 40:  # Fulfil amplitude > 40mV criterion
-                    logger.warning('One of the peaks was too low')
-                    invalid_sweep = True
+                    logger.warning('One of the peaks in sweep {} was < 40mV'.format(i))
+                    #invalid_sweep = True
+                    break
 
             if not invalid_sweep:
                 frequency = len(peaks)/(peaks[-1][0] - peaks[0][0])
-                frequencies.append(frequency)
+                frequencies[frequency] = i
 
         if len(frequencies) == 0:
             logger.warning('No sweep had enough peaks to calculate a frequency')
             return 0.0
+        else:
+            max_frequency = max(frequencies)
+            max_frequency_idx = frequencies[max_frequency]
+            logger.info('Max SSFF is {} from sweep {}'.format(max_frequency, max_frequency_idx))
 
-        return max(frequencies)
+        if verify:
+            verification_plot()
+
+        return max_frequency
 
     def get_max_instantaneous_firing_frequency(self):
         """
@@ -701,32 +737,34 @@ if __name__ == '__main__':
 
         ############################   CURRENT STEPS
         experiment = CurrentStepsData(abf)
+        # for sweep in experiment.sweeps:
+        #     sweep.show_plot()
 
 
-        rheobase = experiment.get_rheobase(verify=True)
-        print('Rheobase of {} is {}mV'.format(experiment.filename, rheobase))
-        exit()
+        # rheobase = experiment.get_rheobase(verify=True)
+        # print('Rheobase of {} is {}mV'.format(experiment.filename, rheobase))
+        # exit()
+        #
+        # sfa = experiment.get_spike_frequency_adaptation()
+        # print('SFA is {}'.format(sfa))
 
-        sfa = experiment.get_spike_frequency_adaptation()
-        print('SFA is {}'.format(sfa))
-
-        max_ssff = experiment.get_max_steady_state_firing_frequency()
+        max_ssff = experiment.get_max_steady_state_firing_frequency(verify=True)
         print('Max steady state firing frequency is {}'.format(max_ssff))
 
-        max_iff = experiment.get_max_instantaneous_firing_frequency()
-        print('Max instantaneous firing frequency is {}'.format(max_iff))
-
-        ap_threshold_1 = experiment.get_ap_threshold_1()
-        print('AP threshold 1 is {}'.format(ap_threshold_1))
-
-        try:
-            ap_threshold_2 = experiment.get_ap_threshold_2()
-            print('AP threshold 2 is {}'.format(ap_threshold_2))
-        except NotImplementedError:
-            logger.warning("I don't know how to do that")
-
-        ap_half_width = experiment.get_ap_half_width()
-        print('AP half width is {}'.format(ap_half_width))
+        # max_iff = experiment.get_max_instantaneous_firing_frequency()
+        # print('Max instantaneous firing frequency is {}'.format(max_iff))
+        #
+        # ap_threshold_1 = experiment.get_ap_threshold_1()
+        # print('AP threshold 1 is {}'.format(ap_threshold_1))
+        #
+        # try:
+        #     ap_threshold_2 = experiment.get_ap_threshold_2()
+        #     print('AP threshold 2 is {}'.format(ap_threshold_2))
+        # except NotImplementedError:
+        #     logger.warning("I don't know how to do that")
+        #
+        # ap_half_width = experiment.get_ap_half_width()
+        # print('AP half width is {}'.format(ap_half_width))
         ############################   \CURRENT STEPS
 
         ############################   VC TEST
