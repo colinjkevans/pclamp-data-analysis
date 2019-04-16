@@ -16,7 +16,7 @@ EXPERIMENT_TYPES = [
 ]
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.WARNING)
 
 
 class Sweep(object):
@@ -266,16 +266,27 @@ class VCTestData(ExperimentData):
 
 class CurrentClampGapFreeData(ExperimentData):
     """Functions to get relevant metrics for 'current clamp gap free' experiments"""
-    def get_resting_potential(self):
+    def get_resting_potential(self, verify=True):
         """
         Resting potential is in the output trace. Just average it. There should
         be jsut one trace
 
         :return:
         """
-        assert len(self.sweeps) == 1
+        def verification_plot():
+            plt.figure(figsize=(32, 20))
+            plt.close('all')
+            plt.plot(self.sweeps[0].time_steps, self.sweeps[0].output_signal)
+            plt.axhline(mean_voltage)
+            plt.show()
 
-        return np.mean(self.sweeps[0].output_signal)
+        assert len(self.sweeps) == 1
+        mean_voltage = np.mean(self.sweeps[0].output_signal)
+
+        if verify:
+            verification_plot()
+
+        return mean_voltage
 
 
 class CurrentStepsData(ExperimentData):
@@ -386,7 +397,7 @@ class CurrentStepsData(ExperimentData):
             logger.info('Data had no sweeps with sustained firing')
             return None, None
 
-    def get_max_steady_state_firing_frequency(self, verify=False):
+    def get_max_steady_state_firing_frequency(self, minimum_ap_amplitude=40, verify=False):
         """
          Max steady state firing frequency:
          max mean firing frequency in response to current injection with no
@@ -403,6 +414,9 @@ class CurrentStepsData(ExperimentData):
                 offset = 140 * i  # TODO Derive offset from data
                 text_height = sweep.output_signal[0] + offset
                 plot_color = 'b'
+                for freq, idx in frequencies.items():
+                    if idx == i:
+                        plt.text(0, text_height, '{:.2f}Hz'.format(freq), fontsize=8)
                 if i == max_frequency_idx:
                     max_freq_peaks = peaks_by_sweep[i]
                     first_ap_time = max_freq_peaks[0][0]
@@ -437,13 +451,13 @@ class CurrentStepsData(ExperimentData):
                 invalid_sweep = True
 
             for peak in peaks:
-                if peak[1] < 40:  # Fulfil amplitude > 40mV criterion
-                    logger.warning('One of the peaks in sweep {} was < 40mV'.format(i))
-                    #invalid_sweep = True
+                if peak[1] - self.get_ap_threshold_1() < minimum_ap_amplitude:  # Fulfil amplitude > failed_ap_threshold
+                    logger.warning('One of the peaks in sweep {} had amplitude < {} mV'.format(i, minimum_ap_amplitude))
+                    invalid_sweep = True
                     break
 
             if not invalid_sweep:
-                frequency = len(peaks)/(peaks[-1][0] - peaks[0][0])
+                frequency = (len(peaks) - 1)/(peaks[-1][0] - peaks[0][0])
                 frequencies[frequency] = i
 
         if len(frequencies) == 0:
