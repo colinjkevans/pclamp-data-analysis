@@ -269,7 +269,7 @@ class CurrentClampGapFreeData(ExperimentData):
     def get_resting_potential(self, verify=True):
         """
         Resting potential is in the output trace. Just average it. There should
-        be jsut one trace
+        be just one trace
 
         :return:
         """
@@ -709,7 +709,7 @@ class CurrentStepsData(ExperimentData):
 
 def get_file_list(abf_location):
     """
-    Figure out which file(s) to analyze based ont eh location(s) specified in the config file.
+    Figure out which file(s) to analyze based on the location(s) specified in the config file.
     Locations can be strings with the name of a file / folder path, or a list of strings.
 
     :param abf_location: The abf location as extracted from config
@@ -762,8 +762,8 @@ if __name__ == '__main__':
         # sfa = experiment.get_spike_frequency_adaptation()
         # print('SFA is {}'.format(sfa))
 
-        max_ssff = experiment.get_max_steady_state_firing_frequency(verify=True)
-        print('Max steady state firing frequency is {}'.format(max_ssff))
+        # max_ssff = experiment.get_max_steady_state_firing_frequency(verify=True)
+        # print('Max steady state firing frequency is {}'.format(max_ssff))
 
         # max_iff = experiment.get_max_instantaneous_firing_frequency()
         # print('Max instantaneous firing frequency is {}'.format(max_iff))
@@ -782,20 +782,20 @@ if __name__ == '__main__':
         ############################   \CURRENT STEPS
 
         ############################   VC TEST
-        # experiment = VCTestData(abf)
-        # print('time units: {}, input units: {}, output units: {}'.format(
-        #     experiment.sweeps[0].time_steps_units,
-        #     experiment.sweeps[0].input_signal_units,
-        #     experiment.sweeps[0].output_signal_units
-        # ))
-        # input_resistances = experiment.get_input_resistance()
-        # print('Input resistances: {}'.format(input_resistances))
-        # print('Input resistance is {} {}/{}'.format(
-        #     np.mean(input_resistances),
-        #     experiment.sweeps[0].input_signal_units,
-        #     experiment.sweeps[0].output_signal_units
-        # ))
-        # print('mV / pA is GOhm')
+        experiment = VCTestData(abf)
+        print('time units: {}, input units: {}, output units: {}'.format(
+            experiment.sweeps[0].time_steps_units,
+            experiment.sweeps[0].input_signal_units,
+            experiment.sweeps[0].output_signal_units
+        ))
+        input_resistances = experiment.get_input_resistance()
+        print('Input resistances: {}'.format(input_resistances))
+        print('Input resistance is {} {}/{}'.format(
+            np.mean(input_resistances),
+            experiment.sweeps[0].input_signal_units,
+            experiment.sweeps[0].output_signal_units
+        ))
+        print('mV / pA is GOhm')
         ############################   \VC TEST
 
         ############################   current clamp gap free

@@ -1,6 +1,6 @@
 import os
 from pyabf import ABF
-from analyze_abf import CurrentStepsData, VCTestData
+from analyze_abf import CurrentStepsData
 
 ABF_LOCATION = r'C:\Users\mattisj\Desktop\9-Patching\GC adult Scn1a\IC steps'
 CURRENT_VS_APS_OUTPUT_FILE = r'C:\Users\mattisj\Desktop\9-Patching\GC adult Scn1a\current_vs_aps.csv'
