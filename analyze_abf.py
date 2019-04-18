@@ -20,7 +20,7 @@ EXPERIMENT_TYPES = [
 ]
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.WARNING)
+logger.setLevel(logging.INFO)
 
 
 class InvalidSweep(Exception):
@@ -64,14 +64,13 @@ class Sweep(object):
         self.sweep_name = sweep_name
         self.analysis_cache = {}  # TODO replace this with functools.lru_cache
 
-        logger.info('{} input units {}'.format(sweep_name, input_signal_units))
-        logger.info('{} output units {}'.format(sweep_name, output_signal_units))
+        logger.debug('{} input units {}'.format(sweep_name, input_signal_units))
+        logger.debug('{} output units {}'.format(sweep_name, output_signal_units))
 
     def __str__(self):
         return 'Data from a single sweep, containing {} data points'.format(len(self.time_steps))
 
-    def fit_input_tophat(
-            self, verify=False, verify_file='verfication.png'):
+    def fit_input_tophat(self, verify=False):
         """
         Fit a tophat function to the input signal and cache the result
         :return: (base_level, hat_level, hat_mid, hat_width)
@@ -81,10 +80,7 @@ class Sweep(object):
             return self.analysis_cache['fit_input_tophat']
 
         tophat_params = fit_tophat(
-            self.time_steps,
-            self.input_signal,
-            verify=verify,
-            verify_file=verify_file)
+            self.time_steps, self.input_signal, verify=verify)
         self.analysis_cache['fit_input_tophat'] = tophat_params
 
         # TODO Try to spot zero height tophats, and return something sensible
@@ -112,6 +108,7 @@ class Sweep(object):
 
         return peaks
 
+    @lru_cache(maxsize=2)
     def get_output_derivative(self, verify=False):
         """
         return d/dt values of output signal. List indices correspond to
@@ -119,12 +116,8 @@ class Sweep(object):
 
         :return: list of dV/dt values
         """
-        if 'get_output_derivative' in self.analysis_cache:
-            logger.info('Found output derivative in cache')
-            return self.analysis_cache['get_output_derivative']
 
         d_dt_output = get_derivative(self.output_signal, self.time_steps)
-        self.analysis_cache['get_output_derivative'] = d_dt_output
 
         if verify:
             plt.close('all')
@@ -196,7 +189,7 @@ class CurrentStepsSweep(Sweep):
 
         return self._has_failed_aps
 
-    @lru_cache
+    @lru_cache(maxsize=1)
     def _get_output_peaks(self):
         """
         Get all peaks from the output signal that are above threshold
@@ -207,6 +200,7 @@ class CurrentStepsSweep(Sweep):
         return find_peaks(
             self.time_steps, self.output_signal, threshold=self.failed_ap_amplitude)
 
+    @lru_cache(maxsize=1)
     def _get_aps_with_idx(self):
         """
         Like get_aps, but the returned list includes list index of the peaks
@@ -217,7 +211,8 @@ class CurrentStepsSweep(Sweep):
         aps = [peak for peak in low_boundary_peaks if peak[2] > self.good_ap_amplitude]
 
         if len(low_boundary_peaks) > len(aps):
-            logger.warning('Sweep at {}{} has failed APs'.format(
+            logger.warning('Sweep {} at {}{} has failed APs'.format(
+                self.sweep_name,
                 self.get_drive_current(),
                 self.input_signal_units
             ))
@@ -227,6 +222,7 @@ class CurrentStepsSweep(Sweep):
 
         return aps
 
+    @lru_cache(maxsize=1)
     def get_aps(self, verify=False):
         """
         Look for peaks in the output voltage. Any peak above self.good_ap_amplitude
@@ -241,7 +237,7 @@ class CurrentStepsSweep(Sweep):
         aps_with_idx = self._get_aps_with_idx()
         return [ap[1:3] for ap in aps_with_idx]
 
-    @lru_cache
+    @lru_cache(maxsize=1)
     def get_drive_current(self, verify=False):
         """
         Drive current is a tophat function.
@@ -261,7 +257,7 @@ class CurrentStepsSweep(Sweep):
     # def get_ap_amplitudes(self):
     #     pass
 
-    @lru_cache
+    @lru_cache(maxsize=1)
     def get_steady_state_ap_frequency(self):
         if self._has_failed_aps:
             raise InvalidSweep('Steady state firing frequency is invalid for sweeps with failed APs')
@@ -271,7 +267,8 @@ class CurrentStepsSweep(Sweep):
         if len(aps) < 2:
             raise InvalidSweep('Not enough APs to calculate a firing freqency')
 
-        freq = (aps[-1][0] - aps[0][0]) / (len(aps) - 1)  # -1 so we are dividing by intervals, not peaks
+        freq = (len(aps) - 1) / (aps[-1][0] - aps[0][0])  # -1 so we are dividing by intervals, not peaks
+        logger.debug('Steady state firing frequency of {} is {}'.format(self.sweep_name, freq))
 
         return freq
 
@@ -282,7 +279,8 @@ class CurrentStepsSweep(Sweep):
         :return:
         """
         if self.get_ap_count() < 2:
-            raise InvalidSweep('Cannot get a frequency from < 2 APs')
+            logger.debug('{} has < 2 APs. Cannot get frequency'.format(self.sweep_name))
+            raise InvalidSweep()
 
         aps = self.get_aps()
         minimum_ap_interval = float_info.max
@@ -354,7 +352,7 @@ class CurrentStepsSweep(Sweep):
 
         return first_peak_time - threshold_time
 
-    @lru_cache
+    @lru_cache(maxsize=1)
     def get_first_ap_threshold(self, threshold=10000):
         """
         Get the AP threshold of the first AP. Defined as the point at which its
@@ -437,7 +435,7 @@ class ExperimentData(object):
 
 class VCTestData(ExperimentData):
     """Functions to get relevant metrics for 'VC test' experiments"""
-    def get_input_resistance(self):
+    def get_input_resistance(self, verify=False):
         """
         Input resistance: calculate using change in steady state current
         in response to small hyperpolarizing voltage step
@@ -446,11 +444,9 @@ class VCTestData(ExperimentData):
         """
         resistances = []
         for sweep in self.sweeps:
-            voltage_base, applied_voltage, voltage_mid, voltage_width = \
-                sweep.fit_input_tophat()  # Voltage base is should always be ~0
-            voltage_start = voltage_mid - voltage_width / 2
-            logger.info('Current starts at t={}'.format(voltage_start))
-            voltage_end = voltage_mid + voltage_width / 2
+            voltage_base, applied_voltage, voltage_start, voltage_end = \
+                sweep.fit_input_tophat(verify=verify)  # Voltage base is should always be ~0
+            logger.debug('Voltage starts at t={}'.format(voltage_start))
             start_idx = None
             end_idx = None
             for idx, t in enumerate(sweep.time_steps):
@@ -460,7 +456,7 @@ class VCTestData(ExperimentData):
                     end_idx = idx
 
             # Measure current for the middle half of the driven part of the sweep
-            logger.info('Driven slice is {} to {}'.format(start_idx, end_idx))
+            logger.debug('Driven slice is {} to {}'.format(start_idx, end_idx))
             measurement_slice_start = start_idx + (end_idx - start_idx) // 4
             measurement_slice_end = start_idx + 3 * (end_idx - start_idx) // 4
 
@@ -477,15 +473,16 @@ class VCTestData(ExperimentData):
                 sweep.output_signal[resting_slice_start: resting_slice_end]
             )
 
-            logger.info('Applied voltage: {} {}'.format(
-                applied_voltage, sweep.input_signal_units))
-            logger.info('Mean driven current: {} {}'.format(
-                mean_current_in_measurement_slice, sweep.output_signal_units))
-            logger.info('Resting current is: {} {}'.format(
-                mean_current_in_resting_slice, sweep.input_signal_units))
+            logger.debug('{} applied voltage: {} {}'.format(
+                sweep.sweep_name, applied_voltage, sweep.input_signal_units))
+            logger.debug('{} mean driven current: {} {}'.format(
+                sweep.sweep_name, mean_current_in_measurement_slice, sweep.output_signal_units))
+            logger.debug('{} resting current is: {} {}'.format(
+                sweep.sweep_name, mean_current_in_resting_slice, sweep.input_signal_units))
 
             change_in_current = mean_current_in_measurement_slice - mean_current_in_resting_slice
             resistance = applied_voltage / change_in_current
+            logger.info('Resistance from sweep {} is {}'.format(sweep.sweep_name, resistance))
             resistances.append(resistance)
 
         return resistances
@@ -532,14 +529,14 @@ class CurrentStepsData(ExperimentData):
 
         :return: list of floats
         """
+        logger.info('Getting current step sizes for {}'.format(self.filename))
         step_sizes = []
         for sweep in self.sweeps:
-            base_level, hat_level, hat_start, hat_end = sweep.get_drive_current(verify)
-            current_step = hat_level - base_level
-            step_sizes.append(current_step)
+            step_sizes.append(sweep.get_drive_current(verify))
 
         return step_sizes
 
+    @lru_cache(maxsize=1)
     def get_ap_counts(self, verify=False):
         """
         Get a list of the number of action potentials in the output in the
@@ -547,6 +544,7 @@ class CurrentStepsData(ExperimentData):
 
         :return: list of ints
         """
+        logger.info("Getting counts of APs in {}".format(self.filename))
         ap_counts = []
         for sweep in self.sweeps:
             ap_counts.append(sweep.get_ap_count(verify=verify))
@@ -610,13 +608,17 @@ class CurrentStepsData(ExperimentData):
         # Find the sweep with most APs. Breaking ties with higher sweep number.
         ap_counts = defaultdict(list)
         for idx, sweep in enumerate(self.sweeps):
-            try:
-                ap_counts[sweep.get_ap_count()].append(idx)
-            except InvalidSweep:
-                pass
+            if sweep.has_failed_aps():
+                continue
+            ap_counts[sweep.get_ap_count()].append(idx)
+
+        if len(ap_counts) == 0:
+            logger.warning('{} had no sweeps without failed APs'.format(self.filename))
+            return None, None
+
         max_aps = max(ap_counts)
         if max_aps < min_ap_count:
-            logger.info('{} had no sweeps with sustained firing'.format(self.filename))
+            logger.warning('{} had no sweeps with sustained firing'.format(self.filename))
             return None, None
 
         sfa_sweep = max(ap_counts[max_aps])
@@ -705,7 +707,11 @@ class CurrentStepsData(ExperimentData):
         max_frequency = float_info.min
         max_frequency_sweep = None
         for i, sweep in enumerate(self.sweeps):
-            sweep_max_freq, max_freq_ap_num = sweep.get_max_instantaneous_ap_frequency()
+            try:
+                sweep_max_freq, max_freq_ap_num = sweep.get_max_instantaneous_ap_frequency()
+            except InvalidSweep as e:
+                continue
+
             if sweep_max_freq > max_frequency:
                 max_frequency = sweep_max_freq
                 max_frequency_sweep = i
@@ -822,6 +828,8 @@ class CurrentStepsData(ExperimentData):
                 verticalalignment='top')
 
             plt.show()
+
+        logger.info('Getting AP half-width from the first AP elicited')
 
         rheobase_sweep = self.sweeps[self._get_rheobase_sweep_num()]
         half_width_ap = rheobase_sweep.get_aps()[0]

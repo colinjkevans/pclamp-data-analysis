@@ -45,7 +45,7 @@ def fit_tophat(x, y, verify=False, verify_file='verfication.png'):
     # TODO Try to spot close to zero height tophats, which may confuse the algorithm
 
     def top_hat(x, base_level, hat_level, hat_start, hat_end):
-        return np.where((hat_start < x) & (x < hat_end / 2.0), hat_level, base_level)
+        return np.where((hat_start < x) & (x < hat_end), hat_level, base_level)
 
     gradient = list(get_derivative(y, x))
     max_gradient = max(gradient)
@@ -101,13 +101,13 @@ def find_peaks(x, y, threshold=0, verify=False):
     for idx, data_point in enumerate(zip(x, y)):
         if in_peak:
             if data_point[1] > threshold:
-                peak.append(idx, *data_point)
+                peak.append((idx, data_point[0], data_point[1]))
             else:
                 in_peak = False
                 peaks.append(peak)
         elif data_point[1] > threshold:
             in_peak = True
-            peak = [idx, *data_point]
+            peak = [(idx, *data_point)]
 
     # print([peak[0] for peak in peaks])
     # if len(peaks) > 0:
