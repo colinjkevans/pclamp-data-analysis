@@ -33,17 +33,16 @@ def fit_tophat(x, y, verify=False, verify_file='verfication.png'):
     Fit the x and y data to a tophat function, returning:
     base_level - the y-value inside the tophat
     hat_level - the y-value outside the tophat
-    hat_mid - centre of the tophat
-    hat_width - width of the tophat
+    hat_start - start of the tophat
+    hat_end - end of the tophat
 
     :param x: iterable of x values
     :param y: corresponding iterable of y values
     :param verify: Show a plot of the fit, blocking progress until it is dismissed
     :param verify_file:
-    :return: (base_level, hat_level, hat_mid, hat_width)
+    :return: (base_level, hat_level, hat_start, hat_end)
     """
     # TODO Try to spot close to zero height tophats, which may confuse the algorithm
-    # TODO Change hat mid/hat width, to had start/hat end.
 
     def top_hat(x, base_level, hat_level, hat_start, hat_end):
         return np.where((hat_start < x) & (x < hat_end / 2.0), hat_level, base_level)

@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from trace_analysis import fit_tophat, find_peaks, get_derivative
-from config import ABF_LOCATION, AP_THRESHOLD
+from config import ABF_LOCATION
 from sys import float_info
 
 ABF_FILE_EXTENSION = '.abf'
@@ -19,6 +19,7 @@ EXPERIMENT_TYPES = [
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.WARNING)
+
 
 class InvalidSweep(Exception):
     pass
@@ -46,7 +47,6 @@ class Sweep(object):
         :param time_steps_units: units of `time`
         :param input_signal_units: units of `input_signal`
         :param output_signal_units: units of `output_signal`
-        :param metadata: Optional metadata about the sweep (dict)
         """
         # time, input signal and output signal must have the same number of
         # data points
@@ -60,23 +60,41 @@ class Sweep(object):
         self.input_signal_units = input_signal_units
         self.output_signal_units = output_signal_units
         self.sweep_name = sweep_name
-        self.analysis_cache = {}  #TODO replace this with functools.lru_cache
+        self.analysis_cache = {}  # TODO replace this with functools.lru_cache
 
         logger.info('{} input units {}'.format(sweep_name, input_signal_units))
         logger.info('{} output units {}'.format(sweep_name, output_signal_units))
 
-        # TODO cache results of analyses already completed
-
     def __str__(self):
         return 'Data from a single sweep, containing {} data points'.format(len(self.time_steps))
 
-    def find_output_peaks(self, threshold=0, verify=False, verify_file='verification.png'):
+    def fit_input_tophat(
+            self, verify=False, verify_file='verfication.png'):
+        """
+        Fit a tophat function to the input signal and cache the result
+        :return: (base_level, hat_level, hat_mid, hat_width)
+        """
+        if 'fit_input_tophat' in self.analysis_cache:
+            logger.info('Found tophat params in cache')
+            return self.analysis_cache['fit_input_tophat']
+
+        tophat_params = fit_tophat(
+            self.time_steps,
+            self.input_signal,
+            verify=verify,
+            verify_file=verify_file)
+        self.analysis_cache['fit_input_tophat'] = tophat_params
+
+        # TODO Try to spot zero height tophats, and return something sensible
+
+        return tophat_params
+
+    def find_output_peaks(self, threshold=0, verify=False):
         """
         Find the peaks in the output and return a list of (t, V) values
 
         :param threshold:
         :param verify:
-        :param verify_file:
         :return: list of tuples (peak time, peak value)
         """
         if 'find_output_peaks' in self.analysis_cache:
@@ -87,8 +105,7 @@ class Sweep(object):
             self.time_steps,
             self.output_signal,
             threshold=threshold,
-            verify=verify,
-            verify_file=verify_file)
+            verify=verify)
         self.analysis_cache['find_output_peaks'] = peaks
 
         return peaks
@@ -177,8 +194,8 @@ class CurrentStepsSweep(Sweep):
     def _get_output_peaks(self):
         """
         Get all peaks from the output signal that are above threshold
+        self.failed_ap_amplitude
 
-        :param threshold:
         :return:
         """
         return find_peaks(
@@ -206,12 +223,10 @@ class CurrentStepsSweep(Sweep):
 
     def get_aps(self, verify=False):
         """
-        Look for peaks in the output voltage. Any peak above ap_fail_boundary
-        is an AP. Peaks that pass low_boundary, but not ap_fail_boundary are
-        failed peaks, which make the sweep invalid.
+        Look for peaks in the output voltage. Any peak above self.good_ap_amplitude
+        is an AP. Peaks that pass self.failed_ap_amplitude, but not
+        self.good_ap_amplitude are failed peaks, which make the sweep invalid.
 
-        :param failed_ap_amplitude:
-        :param good_ap_amplitude:
         :return: [(ap_time, ap_voltage), ...]
         """
         if verify:
@@ -334,10 +349,11 @@ class CurrentStepsSweep(Sweep):
         return first_peak_time - threshold_time
 
     @lru_cache
-    def get_first_ap_threshold(self, threshold):
+    def get_first_ap_threshold(self, threshold=10000):
         """
         Get the AP threshold of the first AP. Defined as the point at which its
         rate of change is greated than a threshold value.
+        # TODO Lots of functions call this function, but cannot specify a threshold
 
         :param threshold
         :return:
@@ -360,24 +376,22 @@ class CurrentStepsSweep(Sweep):
         :return: width in sweep time units
         """
 
-
     def show_plot(self):
         pass
 
 
 class ExperimentData(object):
     """The set of traces in one abf file (a colloquial, not mathematical set)"""
-    SWEEP_CLASS = Sweep
 
     def __init__(self, abf):
         """
 
         :param abf: The abf file, as loaded by pyabf
-        :param experiment_type: The type of experiment this data is from. One of EXPERIMENT_TYPES
         """
         self.abf = abf
         self.filename = os.path.basename(abf.abfFilePath)
         self.sweep_count = abf.sweepCount
+        self.experiment_type = None  # TODO This should be set by subclasses
         logger.info('{} sweeps in {}'.format(self.sweep_count, self.filename))
 
         # Extract all the sweeps into
@@ -394,16 +408,34 @@ class ExperimentData(object):
             time_steps = self.abf.sweepX
             time_units = self.abf.sweepUnitsX
             self.sweeps.append(
-                CurrentStepsSweep(
+                self._sweep(
                     time_steps,
                     input_signal,
                     output_signal,
                     time_units,
                     input_signal_units,
                     output_signal_units,
-                    sweep_name='{}_{}'.format(self.filename[:-4], sweep_num)
+                    '{}_{}'.format(self.filename[:-4], sweep_num)
                 )
             )
+
+    @staticmethod
+    def _sweep(
+            time_steps,
+            input_signal,
+            output_signal,
+            time_units,
+            input_signal_units,
+            output_signal_units,
+            sweep_name):
+        return Sweep(
+            time_steps,
+            input_signal,
+            output_signal,
+            time_units,
+            input_signal_units,
+            output_signal_units,
+            sweep_name)
 
     def __str__(self):
         return('Experiment data from {} containing {} sweeps of {} data'.format(
@@ -494,7 +526,24 @@ class CurrentClampGapFreeData(ExperimentData):
 
 class CurrentStepsData(ExperimentData):
     """Functions to get relevant metrics for 'current steps' experiments"""
-    SWEEP_CLASS = CurrentStepsSweep
+
+    @staticmethod
+    def _sweep(
+            time_steps,
+            input_signal,
+            output_signal,
+            time_units,
+            input_signal_units,
+            output_signal_units,
+            sweep_name):
+        return CurrentStepsSweep(
+            time_steps,
+            input_signal,
+            output_signal,
+            time_units,
+            input_signal_units,
+            output_signal_units,
+            sweep_name)
 
     def get_current_step_sizes(self, verify=False):
         """
@@ -687,7 +736,7 @@ class CurrentStepsData(ExperimentData):
 
         return max_frequency
 
-    def _get_ap_threshold_1_details(self):
+    def _get_ap_threshold_1_details(self, dvdt_threshold):
         """
         AP threshold #1:
         for first spike obtained at suprathreshold current injection, the
@@ -696,13 +745,12 @@ class CurrentStepsData(ExperimentData):
 
         :return: sweep number of threshold measurement, V or threshold, t of threshold
         """
-        gradient_threshold = 10000  # V/s  TODO handle units properly
 
         # iterate through sweeps and peaks until we find the first peak. We will
         # return a result based on that peak.
         for sweep_num, sweep in enumerate(self.sweeps):
             try:
-                threshold_voltage, threshold_time = sweep.get_first_ap_threshold(gradient_threshold)
+                threshold_voltage, threshold_time = sweep.get_first_ap_threshold(dvdt_threshold)
                 return sweep_num, threshold_voltage, threshold_time
             except InvalidSweep:
                 pass
@@ -718,12 +766,12 @@ class CurrentStepsData(ExperimentData):
         """
         return self._get_ap_threshold_1_details()[2]
 
-    def get_ap_threshold(self):
+    def get_ap_threshold(self, dvdt_threshold=10000):
         """
 
         :return:
         """
-        return self._get_ap_threshold_1_details()[1]
+        return self._get_ap_threshold_1_details(dvdt_threshold)[1]
 
     def get_ap_rise_time(self, verify=False):
         """
