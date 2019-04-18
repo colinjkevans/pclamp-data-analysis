@@ -384,6 +384,52 @@ class CurrentStepsSweep(Sweep):
         pass
 
 
+class VCTestSweep(Sweep):
+    """
+    Functions to extract relevant data from a current steps sweep
+    """
+    def get_input_resistance(self, verify=False):
+        voltage_base, applied_voltage, voltage_start, voltage_end = \
+            self.fit_input_tophat(verify=verify)  # Voltage base should always be ~0
+        logger.debug('Voltage starts at t={}'.format(voltage_start))
+        start_idx = None
+        end_idx = None
+        for idx, t in enumerate(self.time_steps):
+            if t > voltage_start and start_idx is None:
+                start_idx = idx
+            if t > voltage_end and end_idx is None:
+                end_idx = idx
+
+        # Measure current for the middle half of the driven part of the sweep
+        logger.debug('Driven slice is {} to {}'.format(start_idx, end_idx))
+        measurement_slice_start = start_idx + (end_idx - start_idx) // 4
+        measurement_slice_end = start_idx + 3 * (end_idx - start_idx) // 4
+
+        mean_current_in_measurement_slice = np.mean(
+            self.output_signal[measurement_slice_start: measurement_slice_end])
+
+        # Measure current for the middle half post drive part of the sweep
+        last_idx = len(self.input_signal) - 1
+        resting_slice_start = end_idx + (last_idx - end_idx) // 4
+        resting_slice_end = end_idx + 3 * (last_idx - end_idx) // 4
+
+        mean_current_in_resting_slice = np.mean(
+            self.output_signal[resting_slice_start: resting_slice_end])
+
+        logger.debug('{} applied voltage: {} {}'.format(
+            self.sweep_name, applied_voltage, self.input_signal_units))
+        logger.debug('{} mean driven current: {} {}'.format(
+            self.sweep_name, mean_current_in_measurement_slice, self.output_signal_units))
+        logger.debug('{} resting current is: {} {}'.format(
+            self.sweep_name, mean_current_in_resting_slice, self.input_signal_units))
+
+        change_in_current = mean_current_in_measurement_slice - mean_current_in_resting_slice
+        resistance = applied_voltage / change_in_current
+        logger.info('Resistance from sweep {} is {}'.format(self.sweep_name, resistance))
+
+        return resistance
+
+
 class ExperimentData(object):
     """The set of traces in one abf file (a colloquial, not mathematical set)"""
 
@@ -435,6 +481,11 @@ class ExperimentData(object):
 
 class VCTestData(ExperimentData):
     """Functions to get relevant metrics for 'VC test' experiments"""
+    sweeps: List[VCTestSweep]
+
+    def _sweep(self, *args, **kwargs):
+        return VCTestSweep(*args, **kwargs)
+
     def get_input_resistance(self, verify=False):
         """
         Input resistance: calculate using change in steady state current
@@ -444,46 +495,7 @@ class VCTestData(ExperimentData):
         """
         resistances = []
         for sweep in self.sweeps:
-            voltage_base, applied_voltage, voltage_start, voltage_end = \
-                sweep.fit_input_tophat(verify=verify)  # Voltage base is should always be ~0
-            logger.debug('Voltage starts at t={}'.format(voltage_start))
-            start_idx = None
-            end_idx = None
-            for idx, t in enumerate(sweep.time_steps):
-                if t > voltage_start and start_idx is None:
-                    start_idx = idx
-                if t > voltage_end and end_idx is None:
-                    end_idx = idx
-
-            # Measure current for the middle half of the driven part of the sweep
-            logger.debug('Driven slice is {} to {}'.format(start_idx, end_idx))
-            measurement_slice_start = start_idx + (end_idx - start_idx) // 4
-            measurement_slice_end = start_idx + 3 * (end_idx - start_idx) // 4
-
-            mean_current_in_measurement_slice = np.mean(
-                sweep.output_signal[measurement_slice_start: measurement_slice_end]
-            )
-
-            # Measure current for the middle half post drive part of the sweep
-            last_idx = len(sweep.input_signal) - 1
-            resting_slice_start = end_idx + (last_idx - end_idx) // 4
-            resting_slice_end = end_idx + 3 * (last_idx - end_idx) // 4
-
-            mean_current_in_resting_slice = np.mean(
-                sweep.output_signal[resting_slice_start: resting_slice_end]
-            )
-
-            logger.debug('{} applied voltage: {} {}'.format(
-                sweep.sweep_name, applied_voltage, sweep.input_signal_units))
-            logger.debug('{} mean driven current: {} {}'.format(
-                sweep.sweep_name, mean_current_in_measurement_slice, sweep.output_signal_units))
-            logger.debug('{} resting current is: {} {}'.format(
-                sweep.sweep_name, mean_current_in_resting_slice, sweep.input_signal_units))
-
-            change_in_current = mean_current_in_measurement_slice - mean_current_in_resting_slice
-            resistance = applied_voltage / change_in_current
-            logger.info('Resistance from sweep {} is {}'.format(sweep.sweep_name, resistance))
-            resistances.append(resistance)
+            resistances.append(sweep.get_input_resistance())
 
         return resistances
 
