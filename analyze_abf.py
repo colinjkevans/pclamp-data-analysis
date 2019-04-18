@@ -2,6 +2,8 @@ import os
 import logging
 from functools import lru_cache
 from collections import defaultdict
+from typing import List
+
 from pyabf import ABF
 import matplotlib.pyplot as plt
 import numpy as np
@@ -168,11 +170,15 @@ class CurrentStepsSweep(Sweep):
     """
     Functions to extract relevant data from a current steps sweep
     """
+    DEFAULT_GOOD_AP_AMPLITUDE = 0
+    DEFAULT_FAILED_AP_AMPLITUDE = -20
 
-    def __init__(self, good_ap_amplitude=0, failed_ap_amplitude=-20, *args, **kwargs):
+    def __init__(self, *args, **kwargs):
         self._has_failed_aps = None
-        self.good_ap_amplitude = good_ap_amplitude
-        self.failed_ap_amplitude = failed_ap_amplitude
+        # These should be overwritten after instantiation to use different values
+        self.good_ap_amplitude = self.DEFAULT_GOOD_AP_AMPLITUDE
+        self.failed_ap_amplitude = self.DEFAULT_FAILED_AP_AMPLITUDE
+
         super().__init__(*args, **kwargs)
 
     def has_aps(self):
@@ -246,8 +252,8 @@ class CurrentStepsSweep(Sweep):
         current_step = hat_level - base_level
         return current_step
 
-    def get_ap_count(self):
-        return len(self.get_aps())
+    def get_ap_count(self, verify=False):
+        return len(self.get_aps(verify))
 
     # def get_ap_times(self):
     #     pass
@@ -391,7 +397,7 @@ class ExperimentData(object):
         self.abf = abf
         self.filename = os.path.basename(abf.abfFilePath)
         self.sweep_count = abf.sweepCount
-        self.experiment_type = None  # TODO This should be set by subclasses
+        self.experiment_type = 'experiment'  # TODO This should be set by subclasses
         logger.info('{} sweeps in {}'.format(self.sweep_count, self.filename))
 
         # Extract all the sweeps into
@@ -420,22 +426,8 @@ class ExperimentData(object):
             )
 
     @staticmethod
-    def _sweep(
-            time_steps,
-            input_signal,
-            output_signal,
-            time_units,
-            input_signal_units,
-            output_signal_units,
-            sweep_name):
-        return Sweep(
-            time_steps,
-            input_signal,
-            output_signal,
-            time_units,
-            input_signal_units,
-            output_signal_units,
-            sweep_name)
+    def _sweep(*args):
+        return Sweep(*args)
 
     def __str__(self):
         return('Experiment data from {} containing {} sweeps of {} data'.format(
@@ -526,24 +518,12 @@ class CurrentClampGapFreeData(ExperimentData):
 
 class CurrentStepsData(ExperimentData):
     """Functions to get relevant metrics for 'current steps' experiments"""
+    # This is a type hint for pycharm - not functional
+    sweeps: List[CurrentStepsSweep]
 
     @staticmethod
-    def _sweep(
-            time_steps,
-            input_signal,
-            output_signal,
-            time_units,
-            input_signal_units,
-            output_signal_units,
-            sweep_name):
-        return CurrentStepsSweep(
-            time_steps,
-            input_signal,
-            output_signal,
-            time_units,
-            input_signal_units,
-            output_signal_units,
-            sweep_name)
+    def _sweep(*args):
+        return CurrentStepsSweep(*args)
 
     def get_current_step_sizes(self, verify=False):
         """
@@ -736,7 +716,7 @@ class CurrentStepsData(ExperimentData):
 
         return max_frequency
 
-    def _get_ap_threshold_1_details(self, dvdt_threshold):
+    def _get_ap_threshold_1_details(self, dvdt_threshold=10000):
         """
         AP threshold #1:
         for first spike obtained at suprathreshold current injection, the
@@ -766,12 +746,12 @@ class CurrentStepsData(ExperimentData):
         """
         return self._get_ap_threshold_1_details()[2]
 
-    def get_ap_threshold(self, dvdt_threshold=10000):
+    def get_ap_threshold(self):
         """
 
         :return:
         """
-        return self._get_ap_threshold_1_details(dvdt_threshold)[1]
+        return self._get_ap_threshold_1_details()[1]
 
     def get_ap_rise_time(self, verify=False):
         """
@@ -851,6 +831,8 @@ class CurrentStepsData(ExperimentData):
         ap_idx = rheobase_sweep.get_first_ap_peak_data_index()
         voltage_at_time = dict(zip(rheobase_sweep.time_steps, rheobase_sweep.output_signal))
 
+        peak_start = None
+        peak_end = None
         # Iterate back through the data to find the half peak time
         for idx_diff, time_step in enumerate(rheobase_sweep.time_steps[ap_idx::-1]):
             if voltage_at_time[time_step] < half_peak_voltage:
@@ -867,6 +849,7 @@ class CurrentStepsData(ExperimentData):
                 peak_end_idx = ap_idx + idx_diff
                 break
 
+        assert peak_start is not None and peak_end is not None
         ap_half_width = peak_end - peak_start
 
         if verify:
