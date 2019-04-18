@@ -45,8 +45,8 @@ def fit_tophat(x, y, verify=False, verify_file='verfication.png'):
     # TODO Try to spot close to zero height tophats, which may confuse the algorithm
     # TODO Change hat mid/hat width, to had start/hat end.
 
-    def top_hat(x, base_level, hat_level, hat_mid, hat_width):
-        return np.where((hat_mid - hat_width / 2.0 < x) & (x < hat_mid + hat_width / 2.0), hat_level, base_level)
+    def top_hat(x, base_level, hat_level, hat_start, hat_end):
+        return np.where((hat_start < x) & (x < hat_end / 2.0), hat_level, base_level)
 
     gradient = list(get_derivative(y, x))
     max_gradient = max(gradient)
@@ -64,23 +64,23 @@ def fit_tophat(x, y, verify=False, verify_file='verfication.png'):
 
     base_level = np.mean(y[:min(step_indices)])
     hat_level = np.mean(y[min(*step_indices):max(*step_indices)])
-    hat_mid = np.mean(step_xs)
-    hat_width = max(*step_xs) - min(*step_xs)
+    hat_start = min(*step_xs)
+    hat_end = max(*step_xs)
 
     if verify:
         plt.close('all')
         plt.figure(figsize=(8, 5))
         plt.plot(x, y)
-        plt.plot(x, top_hat(x, base_level, hat_level, hat_mid, hat_width))
+        plt.plot(x, top_hat(x, base_level, hat_level, hat_start, hat_end))
         if verify == 'offline':
             verify_offline(plt, verify_file)
         else:
             plt.show()
 
-    return base_level, hat_level, hat_mid, hat_width
+    return base_level, hat_level, hat_start, hat_end
 
 
-def find_peaks(x, y, threshold=0, verify=False, verify_file='verification.png'):
+def find_peaks(x, y, threshold=0, verify=False):
     """
     Count signficant spikes in y values above threshold, for some definition
     of "significant". This is a very naive approach - any time the trace goes
@@ -92,24 +92,23 @@ def find_peaks(x, y, threshold=0, verify=False, verify_file='verification.png'):
     :param y: list of y values
     :param threshold: y threshold that neesd to be crossed to count as a peak
     :param verify: If True, a plot showing peaks found will be shown, or saved to file if verify=='offline'
-    :param verify_file: name of file for offline verification
-    :return: list of (x, y) values of peaks at point of maximum y
+    :return: list of (idx, x, y) values of peaks at point of maximum y
     """
     logger.debug('Peak threshold is {}'.format(threshold))
 
     in_peak = False
     peak = []  # list of data points that are part of a peak
     peaks = []  # list or peaks
-    for data_point in zip(x, y):
+    for idx, data_point in enumerate(zip(x, y)):
         if in_peak:
             if data_point[1] > threshold:
-                peak.append(data_point)
+                peak.append(idx, *data_point)
             else:
                 in_peak = False
                 peaks.append(peak)
         elif data_point[1] > threshold:
             in_peak = True
-            peak = [data_point]
+            peak = [idx, *data_point]
 
     # print([peak[0] for peak in peaks])
     # if len(peaks) > 0:
@@ -118,18 +117,15 @@ def find_peaks(x, y, threshold=0, verify=False, verify_file='verification.png'):
     #     print('No peaks')
     # print(len(peaks))
 
-    maximums = [max(peak, key=lambda d: d[1]) for peak in peaks]
+    maximums = [max(peak, key=lambda d: d[2]) for peak in peaks]
 
     if verify:
         plt.close(fig='all')  # Make sure there are no unwanted figures
         plt.figure(figsize=(16, 10))
         plt.plot(x, y)
         for m in maximums:
-            plt.axvline(x=m[0], color='red')
-        if verify == 'offline':
-            verify_offline(plt, verify_file)
-        else:
-            plt.show()
+            plt.axvline(x=m[1], color='red')
+        plt.show()
 
     logger.info('Found {} peaks'.format(len(maximums)))
     return maximums

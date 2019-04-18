@@ -1,5 +1,7 @@
 import os
 import logging
+from functools import lru_cache
+from collections import defaultdict
 from pyabf import ABF
 import matplotlib.pyplot as plt
 import numpy as np
@@ -17,6 +19,9 @@ EXPERIMENT_TYPES = [
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.WARNING)
+
+class InvalidSweep(Exception):
+    pass
 
 
 class Sweep(object):
@@ -64,28 +69,6 @@ class Sweep(object):
 
     def __str__(self):
         return 'Data from a single sweep, containing {} data points'.format(len(self.time_steps))
-
-    def fit_input_tophat(
-            self, verify=False, verify_file='verfication.png'):
-        """
-        Fit a tophat function to the input signal and cache the result
-
-        :return: (base_level, hat_level, hat_mid, hat_width)
-        """
-        if 'fit_input_tophat' in self.analysis_cache:
-            logger.info('Found tophat params in cache')
-            return self.analysis_cache['fit_input_tophat']
-
-        tophat_params = fit_tophat(
-            self.time_steps,
-            self.input_signal,
-            verify=verify,
-            verify_file=verify_file)
-        self.analysis_cache['fit_input_tophat'] = tophat_params
-
-        # TODO Try to spot zero height tophats, and return something sensible
-
-        return tophat_params
 
     def find_output_peaks(self, threshold=0, verify=False, verify_file='verification.png'):
         """
@@ -164,8 +147,228 @@ class Sweep(object):
         plt.show()
 
 
+class CurrentStepsSweep(Sweep):
+    """
+    Functions to extract relevant data from a current steps sweep
+    """
+
+    def __init__(self, good_ap_amplitude=0, failed_ap_amplitude=-20, *args, **kwargs):
+        self._has_failed_aps = None
+        self.good_ap_amplitude = good_ap_amplitude
+        self.failed_ap_amplitude = failed_ap_amplitude
+        super().__init__(*args, **kwargs)
+
+    def has_aps(self):
+        return len(self.get_aps()) > 0
+
+    def has_failed_aps(self):
+        """
+        Boolean specifying whether the sweep has failed aps. See get_aps for
+        definition.
+        """
+        if self._has_failed_aps is None:
+            # Call get_aps with default args to ensure _has_failed_aps is set
+            logger.warning('Checking for failed APs with default threshold values')
+            self.get_aps()
+
+        return self._has_failed_aps
+
+    @lru_cache
+    def _get_output_peaks(self):
+        """
+        Get all peaks from the output signal that are above threshold
+
+        :param threshold:
+        :return:
+        """
+        return find_peaks(
+            self.time_steps, self.output_signal, threshold=self.failed_ap_amplitude)
+
+    def _get_aps_with_idx(self):
+        """
+        Like get_aps, but the returned list includes list index of the peaks
+
+        :return: [(idx, time, voltage), ...]
+        """
+        low_boundary_peaks = self._get_output_peaks()
+        aps = [peak for peak in low_boundary_peaks if peak[2] > self.good_ap_amplitude]
+
+        if len(low_boundary_peaks) > len(aps):
+            logger.warning('Sweep at {}{} has failed APs'.format(
+                self.get_drive_current(),
+                self.input_signal_units
+            ))
+            self._has_failed_aps = True
+        else:
+            self._has_failed_aps = False
+
+        return aps
+
+    def get_aps(self, verify=False):
+        """
+        Look for peaks in the output voltage. Any peak above ap_fail_boundary
+        is an AP. Peaks that pass low_boundary, but not ap_fail_boundary are
+        failed peaks, which make the sweep invalid.
+
+        :param failed_ap_amplitude:
+        :param good_ap_amplitude:
+        :return: [(ap_time, ap_voltage), ...]
+        """
+        if verify:
+            raise NotImplementedError
+
+        aps_with_idx = self._get_aps_with_idx()
+        return [ap[1:3] for ap in aps_with_idx]
+
+    @lru_cache
+    def get_drive_current(self, verify=False):
+        """
+        Drive current is a tophat function.
+        :return:
+        """
+        base_level, hat_level, hat_start, hat_end = fit_tophat(
+            self.time_steps, self.input_signal, verify=verify)
+        current_step = hat_level - base_level
+        return current_step
+
+    def get_ap_count(self):
+        return len(self.get_aps())
+
+    # def get_ap_times(self):
+    #     pass
+    #
+    # def get_ap_amplitudes(self):
+    #     pass
+
+    @lru_cache
+    def get_steady_state_ap_frequency(self):
+        if self._has_failed_aps:
+            raise InvalidSweep('Steady state firing frequency is invalid for sweeps with failed APs')
+
+        aps = self.get_aps()
+
+        if len(aps) < 2:
+            raise InvalidSweep('Not enough APs to calculate a firing freqency')
+
+        freq = (aps[-1][0] - aps[0][0]) / (len(aps) - 1)  # -1 so we are dividing by intervals, not peaks
+
+        return freq
+
+    def get_max_instantaneous_ap_frequency(self):
+        """
+        Get the frequency corresponding to the shortest gap between APs in this sweep
+
+        :return:
+        """
+        if self.get_ap_count() < 2:
+            raise InvalidSweep('Cannot get a frequency from < 2 APs')
+
+        aps = self.get_aps()
+        minimum_ap_interval = float_info.max
+        minimum_ap_interval_first_ap = None
+        for idx, ap in enumerate(aps[1:]):
+            ap_interval = ap[0] - aps[idx][0]
+            logger.debug('{}, {} to {} peak interval is {}'.format(
+                self.sweep_name, idx, idx + 1, ap_interval))
+            if ap_interval < minimum_ap_interval:
+                logger.debug('Found a smaller peak interval in {}, peaks {} to {}'.format(
+                        self.sweep_name, idx, idx + 1))
+                minimum_ap_interval = ap_interval
+                minimum_ap_interval_first_ap = idx
+
+        return 1 / minimum_ap_interval, minimum_ap_interval_first_ap
+
+    def get_ap_frequency_adaptation(self, min_ap_count):
+        """
+        Spike frequency adaptation: ratio of first to Nth interspike interval
+        (ISI1/ISI10) and ratio of first to last interspike interval
+        (ISI1/ISIn) for the first suprathreshold current injection to elicit
+        sustained firing
+
+        :return:
+        """
+        if self.get_ap_count() < min_ap_count:
+            raise InvalidSweep('Not enough APs for spike frequency adaptation')
+
+        if self.has_failed_aps():
+            raise InvalidSweep('Sweep has failed APs')
+
+        aps = self.get_aps()
+        isi_1 = aps[1][0] - aps[0][0]
+        isi_10 = aps[10][0] - aps[9][0]
+        isi_n = aps[-1][0] - aps[-2][0]
+
+        return isi_1/isi_10, isi_1/isi_n
+
+    def get_first_ap_peak_data_index(self):
+        """
+        Get the index of the time_steps / input_signal / output_signal iterables
+        where the peak of the first AP occurs
+
+        :return:
+        """
+        if self.get_ap_count() < 1:
+            raise InvalidSweep('No APs in {}'.format(self.sweep_name))
+
+        aps_with_idx = self._get_aps_with_idx()
+        return aps_with_idx[0][0]
+
+    def get_first_ap_amplitude(self):
+        """
+
+        :return:
+        """
+        threshold_voltage, threshold_time = self.get_first_ap_threshold()
+        first_peak_voltage = self.get_aps()[0][1]
+
+        return first_peak_voltage - threshold_voltage
+
+    def get_first_ap_rise_time(self):
+        """
+
+        :return:
+        """
+        threshold_voltage, threshold_time = self.get_first_ap_threshold()
+        first_peak_time = self.get_aps()[0][0]
+
+        return first_peak_time - threshold_time
+
+    @lru_cache
+    def get_first_ap_threshold(self, threshold):
+        """
+        Get the AP threshold of the first AP. Defined as the point at which its
+        rate of change is greated than a threshold value.
+
+        :param threshold
+        :return:
+        """
+        if self.get_ap_count() == 0:
+            raise InvalidSweep('Sweep {} has not APs'.format(self.sweep_name))
+
+        dv_dt = self.get_output_derivative()
+        for idx, gradient in enumerate(dv_dt):
+            if gradient > threshold:
+                # return the value of the voltage at the timestamp that
+                # we cross the threshold in gradient, and the time it happened
+                return self.output_signal[idx], self.time_steps[idx]
+
+    def get_first_ap_half_width(self):
+        """
+        Full width, half maximum amplitude for first AP in the sweep. Amplitude measured
+        from threshold to peak
+
+        :return: width in sweep time units
+        """
+
+
+    def show_plot(self):
+        pass
+
+
 class ExperimentData(object):
     """The set of traces in one abf file (a colloquial, not mathematical set)"""
+    SWEEP_CLASS = Sweep
+
     def __init__(self, abf):
         """
 
@@ -191,7 +394,7 @@ class ExperimentData(object):
             time_steps = self.abf.sweepX
             time_units = self.abf.sweepUnitsX
             self.sweeps.append(
-                Sweep(
+                CurrentStepsSweep(
                     time_steps,
                     input_signal,
                     output_signal,
@@ -291,7 +494,9 @@ class CurrentClampGapFreeData(ExperimentData):
 
 class CurrentStepsData(ExperimentData):
     """Functions to get relevant metrics for 'current steps' experiments"""
-    def get_current_step_sizes(self):
+    SWEEP_CLASS = CurrentStepsSweep
+
+    def get_current_step_sizes(self, verify=False):
         """
         Get a list of the step sizes of the driving current in the same order
         as self.sweeps
@@ -300,13 +505,13 @@ class CurrentStepsData(ExperimentData):
         """
         step_sizes = []
         for sweep in self.sweeps:
-            base_level, hat_level, hat_mid, hat_width = sweep.fit_input_tophat()
+            base_level, hat_level, hat_start, hat_end = sweep.get_drive_current(verify)
             current_step = hat_level - base_level
             step_sizes.append(current_step)
 
         return step_sizes
 
-    def get_ap_counts(self):
+    def get_ap_counts(self, verify=False):
         """
         Get a list of the number of action potentials in the output in the
         same order as self.sweeps
@@ -315,7 +520,7 @@ class CurrentStepsData(ExperimentData):
         """
         ap_counts = []
         for sweep in self.sweeps:
-            ap_counts.append(len(sweep.find_output_peaks()))
+            ap_counts.append(sweep.get_ap_count(verify=verify))
 
         return ap_counts
 
@@ -331,7 +536,7 @@ class CurrentStepsData(ExperimentData):
                 offset = 140 * i  # TODO Derive offset from data
                 plt.plot(sweep.time_steps, sweep.output_signal + offset)
                 text_height = sweep.output_signal[0] + offset
-                plt.text(0, text_height, '{:.0f}'.format(peaks_at_voltage[i][1]), fontsize=8)
+                plt.text(0, text_height, '{:.0f}'.format(sweep.get_drive_current()), fontsize=8)
                 if i == rheobase_sweep_num:
                     plt.text(
                         .95,
@@ -344,60 +549,56 @@ class CurrentStepsData(ExperimentData):
             plt.gca().get_yaxis().set_visible(False)
             plt.show()
 
-        drive_voltages = []
-        peak_count = []
-        for sweep in self.sweeps:
-            # Find the voltage of the driving signals for all sweeps
-            tophat_params = sweep.fit_input_tophat()
-            drive_voltages.append(tophat_params[1] - tophat_params[0])
-
-            # count the peaks
-            peak_count.append(len(sweep.find_output_peaks()))
-
-        peaks_at_voltage = list(zip(peak_count, drive_voltages))
-
-        for i, sweep in enumerate(peaks_at_voltage):
-            if sweep[0] > 0:
-                rheobase = sweep[1]  # return voltage of fist sweep with a peak
-                rheobase_sweep_num = i
-                break
-        else:
-            logger.info('No sweep had a peak in this experiment')
-            # TODO Might be better to raise an exception
-            rheobase = None  # return None if there are no APs in the experiment
-            rheobase_sweep_num = None
+        rheobase_sweep_num = self._get_rheobase_sweep_num()
+        rheobase = self.sweeps[rheobase_sweep_num].get_drive_current()
 
         if verify:
             verification_plot()
 
         return rheobase
 
-    def get_spike_frequency_adaptation(self):
+    def _get_rheobase_sweep_num(self):
+        """
+        get the sweep number that the rheobase is obtained from. i.e. the first
+        sweep with an AP
+        :return:
+        """
+        for idx, sweep in enumerate(self.sweeps):
+            if sweep.get_ap_count() > 0:
+                return idx
+        else:
+            logger.warning('No sweep in {} had a peak'.format(self.filename))
+            return None
+
+    def get_spike_frequency_adaptation(self, min_ap_count=11, verify=False):
         """
         Spike frequency adaptation: ratio of first to 10th interspike interval
         (ISI1/ISI10) and ratio of first to last interspike interval
-        (ISI1/ISIn) for the first suprathreshold current injection to elicit
-        sustained firing
-
-        TODO What counts as sustained firing? First sweep with 11+ peaks?
+        (ISI1/ISIn) for the Sweep with most APs and at least `min_ap_count` APs
 
         :return: (isi_1/isi_10, isi_1/isi_n)
         """
-        peaks_by_sweep = []
-        for sweep in self.sweeps:
-            peaks_by_sweep.append(sweep.find_output_peaks())
-
-        for peaks in peaks_by_sweep:
-            if len(peaks) >= 11:
-                isi_1 = peaks[1][0] - peaks[0][0]
-                isi_10 = peaks[10][0] - peaks[9][0]
-                isi_n = peaks[-1][0] - peaks[-2][0]
-                return isi_1/isi_10, isi_1/isi_n
-        else:
-            logger.info('Data had no sweeps with sustained firing')
+        # Find the sweep with most APs. Breaking ties with higher sweep number.
+        ap_counts = defaultdict(list)
+        for idx, sweep in enumerate(self.sweeps):
+            try:
+                ap_counts[sweep.get_ap_count()].append(idx)
+            except InvalidSweep:
+                pass
+        max_aps = max(ap_counts)
+        if max_aps < min_ap_count:
+            logger.info('{} had no sweeps with sustained firing'.format(self.filename))
             return None, None
 
-    def get_max_steady_state_firing_frequency(self, minimum_ap_amplitude=40, verify=False):
+        sfa_sweep = max(ap_counts[max_aps])
+        sfa = self.sweeps[sfa_sweep].get_ap_frequency_adaptation(min_ap_count)
+
+        if verify:
+            raise NotImplementedError
+
+        return sfa
+
+    def get_max_steady_state_firing_frequency(self, verify=False):
         """
          Max steady state firing frequency:
          max mean firing frequency in response to current injection with no
@@ -413,12 +614,12 @@ class CurrentStepsData(ExperimentData):
             for i, sweep in enumerate(self.sweeps):
                 offset = 140 * i  # TODO Derive offset from data
                 text_height = sweep.output_signal[0] + offset
-                plot_color = 'b'
+                plot_color = 'r' if i in invalid_sweeps else 'b'
                 for freq, idx in frequencies.items():
                     if idx == i:
                         plt.text(0, text_height, '{:.2f}Hz'.format(freq), fontsize=8)
                 if i == max_frequency_idx:
-                    max_freq_peaks = peaks_by_sweep[i]
+                    max_freq_peaks = self.sweeps[i].get_aps()
                     first_ap_time = max_freq_peaks[0][0]
                     last_ap_time = max_freq_peaks[-1][0]
                     time_diff = last_ap_time - first_ap_time
@@ -432,33 +633,23 @@ class CurrentStepsData(ExperimentData):
                     )
                     plt.axvline(first_ap_time)
                     plt.axvline(last_ap_time)
-                    plot_color = 'r'
+                    plot_color = 'g'
                 plt.plot(sweep.time_steps, sweep.output_signal + offset, color=plot_color)
 
             plt.gca().get_yaxis().set_visible(False)
             plt.show()
 
-        peaks_by_sweep = []
-        for sweep in self.sweeps:
-            # Set threshold = 0 to fulfil "overshooting 0mV" criterion
-            peaks_by_sweep.append(sweep.find_output_peaks(threshold=0))
+        # Start of function
+        frequencies = {}  # {<frequency>: sweep_num, ... }
+        invalid_sweeps = []
+        for i, sweep in enumerate(self.sweeps):
+            try:
+                sweep_ap_freq = sweep.get_steady_state_ap_frequency()
+            except InvalidSweep:
+                invalid_sweeps.append(i)
+                continue
 
-        frequencies = {}  # {frequency: sweep_num, ... }
-        for i, peaks in enumerate(peaks_by_sweep):
-            invalid_sweep = False
-            if len(peaks) < 2:
-                logger.info('Not enough peaks in sweep {} to calculate a frequency'.format(i))
-                invalid_sweep = True
-
-            for peak in peaks:
-                if peak[1] - self.get_ap_threshold_1() < minimum_ap_amplitude:  # Fulfil amplitude > failed_ap_threshold
-                    logger.warning('One of the peaks in sweep {} had amplitude < {} mV'.format(i, minimum_ap_amplitude))
-                    invalid_sweep = True
-                    break
-
-            if not invalid_sweep:
-                frequency = (len(peaks) - 1)/(peaks[-1][0] - peaks[0][0])
-                frequencies[frequency] = i
+            frequencies[sweep_ap_freq] = i
 
         if len(frequencies) == 0:
             logger.warning('No sweep had enough peaks to calculate a frequency')
@@ -473,7 +664,7 @@ class CurrentStepsData(ExperimentData):
 
         return max_frequency
 
-    def get_max_instantaneous_firing_frequency(self):
+    def get_max_instantaneous_firing_frequency(self, verify=False):
         """
         Max instantaneous firing frequency:
         inverse of smallest interspike interval in response to current
@@ -482,24 +673,19 @@ class CurrentStepsData(ExperimentData):
 
         :return:
         """
-        minimum_peak_interval = float_info.max
-        for sweep in self.sweeps:
-            # Set threshold = 0 to fulfil "overshooting 0mV" criterion
-            peaks = sweep.find_output_peaks(threshold=0)
-            for idx, peak in enumerate(peaks[1:]):
-                peak_interval = peak[0] - peaks[idx][0]
-                logger.debug('{}, {} to {} peak interval is {}'.format(
-                    sweep.sweep_name, idx, idx + 1, peak_interval
-                ))
-                if peak_interval < minimum_peak_interval:
-                    logger.info(
-                        'Found a smaller peak interval in {}, peaks {} to {}'.format(
-                            sweep.sweep_name, idx, idx + 1
-                        )
-                    )
-                    minimum_peak_interval = peak_interval
+        max_frequency = float_info.min
+        max_frequency_sweep = None
+        for i, sweep in enumerate(self.sweeps):
+            sweep_max_freq, max_freq_ap_num = sweep.get_max_instantaneous_ap_frequency()
+            if sweep_max_freq > max_frequency:
+                max_frequency = sweep_max_freq
+                max_frequency_sweep = i
 
-        return 1/minimum_peak_interval
+        if verify:
+            logger.info('max frequency is in sweep {}'.format(max_frequency_sweep))
+            raise NotImplementedError
+
+        return max_frequency
 
     def _get_ap_threshold_1_details(self):
         """
@@ -515,14 +701,14 @@ class CurrentStepsData(ExperimentData):
         # iterate through sweeps and peaks until we find the first peak. We will
         # return a result based on that peak.
         for sweep_num, sweep in enumerate(self.sweeps):
-            for peak in sweep.find_output_peaks():
-                dVdt = sweep.get_output_derivative()
-                for idx, gradient in enumerate(dVdt):
-                    if gradient > gradient_threshold:
-                        # return the value of the voltage at the timestamp that
-                        # we cross the threshold in gradient
-                        logger.info('Found AP threshold 1 in {}'.format(sweep.sweep_name))
-                        return sweep_num, sweep.output_signal[idx], sweep.time_steps[idx]
+            try:
+                threshold_voltage, threshold_time = sweep.get_first_ap_threshold(gradient_threshold)
+                return sweep_num, threshold_voltage, threshold_time
+            except InvalidSweep:
+                pass
+        else:
+            # If there are no peaks in any sweep we will hit this. This shouldn't happen.
+            raise Exception('No sweep had an AP')
 
     def _get_ap_threshold_1_time(self):
         """
@@ -532,40 +718,14 @@ class CurrentStepsData(ExperimentData):
         """
         return self._get_ap_threshold_1_details()[2]
 
-    def get_ap_threshold_1(self):
+    def get_ap_threshold(self):
         """
 
         :return:
         """
         return self._get_ap_threshold_1_details()[1]
 
-    def get_ap_threshold_2(self):
-        """
-        AP threshold #2:
-        for first spike obtained at suprathreshold current injection, the
-        voltage at which second derivative (d2V/dt2) reaches 5% of maximal
-        value
-
-        # TODO this return value is dubious for the test data
-        # TODO it occurs outside the driving voltage step.
-        # TODO Would we get a reasonable result by looking at the slice in the
-        # TODO driving tophat
-
-        :return:
-        """
-        raise NotImplementedError
-        # for sweep in self.sweeps:
-        #     for peak in sweep.find_output_peaks():
-        #         d2V_dt2 = sweep.get_output_second_derivative()
-        #         d2V_dt2_peaks = find_peaks(sweep.time_steps, d2V_dt2)
-        #         max_first_d2V_dt2_peak = d2V_dt2_peaks[0][1]
-        #         for idx, d2V_dt2_value in enumerate(d2V_dt2):
-        #             if d2V_dt2_value > 0.05 * max_first_d2V_dt2_peak:
-        #                 logger.info('Found AP threshold 2 in {}'.format(sweep.sweep_name))
-        #                 logger.info('Found AP threshold 2 at t={}'.format(sweep.time_steps[idx]))
-        #                 return sweep.output_signal[idx]
-
-    def get_ap_rise_time(self):
+    def get_ap_rise_time(self, verify=False):
         """
         AP rise time:
         for first spike obtained at suprathreshold current injection, time
@@ -574,11 +734,14 @@ class CurrentStepsData(ExperimentData):
         :return:
         """
         sweep_num, ap_threshold, ap_threshold_time = self._get_ap_threshold_1_details()
-        sweep = self.sweeps[sweep_num]
-        ap_peak_time = sweep.find_output_peaks()[0][0]
-        return ap_peak_time - ap_threshold_time
+        rise_time = self.sweeps[sweep_num].get_first_ap_rise_time()
 
-    def get_ap_amplitude(self):
+        if verify:
+            raise NotImplementedError
+
+        return rise_time
+
+    def get_ap_amplitude(self, verify=False):
         """
         AP amplitude:
         for first spike obtained at suprathreshold current injection, change
@@ -588,9 +751,12 @@ class CurrentStepsData(ExperimentData):
         """
         sweep_num, ap_threshold_voltage, ap_threshold_time = \
             self._get_ap_threshold_1_details()
-        sweep = self.sweeps[sweep_num]
-        ap_peak_voltage = sweep.find_output_peaks()[0][1]
-        return ap_peak_voltage - ap_threshold_voltage
+        ap_amplitude = self.sweeps[sweep_num].get_first_ap_amplitude()
+
+        if verify:
+            raise NotImplementedError
+
+        return ap_amplitude
 
     def get_ap_half_width(self, verify=False):
         """
@@ -606,93 +772,59 @@ class CurrentStepsData(ExperimentData):
             plot_slice_start_idx = peak_start_idx - 3 * (peak_end_idx - peak_start_idx)
             plot_slice_end_idx = peak_end_idx + 5 * (peak_end_idx - peak_start_idx)
             plt.plot(
-                sweep.time_steps[plot_slice_start_idx: plot_slice_end_idx],
-                sweep.output_signal[plot_slice_start_idx: plot_slice_end_idx]
+                rheobase_sweep.time_steps[plot_slice_start_idx: plot_slice_end_idx],
+                rheobase_sweep.output_signal[plot_slice_start_idx: plot_slice_end_idx]
             )
 
             # TODO add text for threshold, peak, half, horizontal lines
-            plt.axhline(threshold_amp, color='b')
-            plt.axhline(sweep.output_signal[peak_idx], color='b')
+            plt.axhline(threshold_voltage, color='b')
+            plt.axhline(rheobase_sweep.output_signal[ap_idx], color='b')
 
-            half_width_amp = 0.5 * (sweep.output_signal[peak_idx] + threshold_amp)
+            half_width_amp = 0.5 * (rheobase_sweep.output_signal[ap_idx] + threshold_voltage)
             plt.axhline(half_width_amp, color='r')
 
-            plt.axvline(sweep.time_steps[peak_start_idx])
-            plt.axvline(sweep.time_steps[peak_end_idx])
+            plt.axvline(rheobase_sweep.time_steps[peak_start_idx])
+            plt.axvline(rheobase_sweep.time_steps[peak_end_idx])
 
             plt.text(
-                sweep.time_steps[plot_slice_end_idx],
-                0.5 * (peak_amplitude + half_width_amp),
+                rheobase_sweep.time_steps[plot_slice_end_idx],
+                0.5 * (ap_peak_voltage + half_width_amp),
                 'AP half width ={:.2g}'.format(ap_half_width),
                 horizontalalignment='right',
                 verticalalignment='top')
 
             plt.show()
 
-        for sweep in self.sweeps:
-            for peak in sweep.find_output_peaks():
-                logger.info('Found first peak in {}'.format(sweep.sweep_name))
-                threshold_amp = self.get_ap_threshold_1()
-                peak_time, peak_amplitude = peak
-                half_peak_voltage = 0.5 * (peak_amplitude + threshold_amp)
-                peak_idx = list(sweep.time_steps).index(peak_time)
-                logger.info('Peak time is {}'.format(peak_time))
-                logger.info('Peak is at data point number {}'.format(peak_idx))
+        rheobase_sweep = self.sweeps[self._get_rheobase_sweep_num()]
+        half_width_ap = rheobase_sweep.get_aps()[0]
+        threshold_voltage = self.get_ap_threshold()
+        ap_time, ap_peak_voltage = half_width_ap
+        half_peak_voltage = 0.5 * (ap_peak_voltage + threshold_voltage)
+        ap_idx = rheobase_sweep.get_first_ap_peak_data_index()
+        voltage_at_time = dict(zip(rheobase_sweep.time_steps, rheobase_sweep.output_signal))
 
-                voltage_at_time = dict(zip(sweep.time_steps, sweep.output_signal))
-                # Iterate back through the data to find the half peak time
-                for idx_diff, time_step in enumerate(sweep.time_steps[peak_idx::-1]):
-                    if voltage_at_time[time_step] < half_peak_voltage:
-                        logger.info('Found peak start at {}'.format(time_step))
-                        peak_start = time_step
-                        peak_start_idx = peak_idx - idx_diff
-                        break
-
-                # Iterate forward through the data to find the half peak time
-                for idx_diff, time_step in enumerate(sweep.time_steps[peak_idx:]):
-                    if voltage_at_time[time_step] < half_peak_voltage:
-                        logger.info('Found peak end at {}'.format(time_step))
-                        peak_end = time_step
-                        peak_end_idx = peak_idx + idx_diff
-                        break
-
-                ap_half_width = peak_end - peak_start
-
-                if verify:
-                    verification_plot()
-
-                return ap_half_width
-
-    def get_input_resistance(self):
-        """
-        Input resistance #1:
-        calculate using slope of the linear fit to the plot of the V-I
-        relation from subthreshold current steps at/around resting potential
-
-        # TODO do this from the last sweep before threshold?
-        # TODO Average gradient for first 20ms?
-        # TODO What is resting potential?
-        # TODO Need to discuss this one.
-
-        :return:
-        """
-        raise NotImplementedError
-        # Find the sweep which elicits the first AP
-        for sweep_num, sweep in enumerate(self.sweeps):
-            if len(sweep.find_output_peaks()) > 0:
-                first_suprathreshold_sweep = sweep_num
+        # Iterate back through the data to find the half peak time
+        for idx_diff, time_step in enumerate(rheobase_sweep.time_steps[ap_idx::-1]):
+            if voltage_at_time[time_step] < half_peak_voltage:
+                logger.info('Found peak start at {}'.format(time_step))
+                peak_start = time_step
+                peak_start_idx = ap_idx - idx_diff
                 break
 
-        last_subthreshold_sweep_num = first_suprathreshold_sweep - 1
+        # Iterate forward through the data to find the half peak time
+        for idx_diff, time_step in enumerate(rheobase_sweep.time_steps[ap_idx:]):
+            if voltage_at_time[time_step] < half_peak_voltage:
+                logger.info('Found peak end at {}'.format(time_step))
+                peak_end = time_step
+                peak_end_idx = ap_idx + idx_diff
+                break
 
-        # Find time of current step in last subthreshold peak
-        last_subthreshold_sweep = self.sweeps[last_subthreshold_sweep_num]
-        tophat_params = last_subthreshold_sweep.fit_input_tophat()
-        current_step_time = tophat_params[2] - tophat_params[3] / 2
-        drive_current = tophat_params[1]
+        ap_half_width = peak_end - peak_start
 
-        # Get the derivative of the output function
-        dV_dt = last_subthreshold_sweep.get_output_derivative()
+        if verify:
+            verification_plot()
+
+        return ap_half_width
 
     def plot_v_vs_i(self, sweep_num):
         """
@@ -768,7 +900,7 @@ if __name__ == '__main__':
         # max_iff = experiment.get_max_instantaneous_firing_frequency()
         # print('Max instantaneous firing frequency is {}'.format(max_iff))
         #
-        # ap_threshold_1 = experiment.get_ap_threshold_1()
+        # ap_threshold_1 = experiment.get_ap_threshold()
         # print('AP threshold 1 is {}'.format(ap_threshold_1))
         #
         # try:
