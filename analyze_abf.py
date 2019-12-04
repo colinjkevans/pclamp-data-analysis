@@ -390,7 +390,7 @@ class VCTestSweep(Sweep):
     """
     def get_input_resistance(self, verify=False):
         voltage_base, applied_voltage, voltage_start, voltage_end = \
-            self.fit_input_tophat(verify=verify)  # Voltage base should always be ~0
+            self.fit_input_tophat(verify=verify)
         logger.debug('Voltage starts at t={}'.format(voltage_start))
         start_idx = None
         end_idx = None
@@ -424,7 +424,7 @@ class VCTestSweep(Sweep):
             self.sweep_name, mean_current_in_resting_slice, self.input_signal_units))
 
         change_in_current = mean_current_in_measurement_slice - mean_current_in_resting_slice
-        resistance = applied_voltage / change_in_current
+        resistance = (applied_voltage - voltage_base) / change_in_current
         logger.info('Resistance from sweep {} is {}'.format(self.sweep_name, resistance))
 
         return resistance
