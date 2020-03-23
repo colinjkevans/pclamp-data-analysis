@@ -3,8 +3,8 @@ from pyabf import ABF
 from analyze_abf import VCTestData
 import numpy as np
 
-ABF_LOCATION = r'C:\Users\mattisj\Desktop\9-Patching\GC juvenile Scn1a\VC test'
-VC_TEST_OUTPUT_FILE = r'C:\Users\mattisj\Desktop\9-Patching\GC juvenile Scn1a\VC test GC juvenile Scn1a.csv'
+ABF_LOCATION = r'C:\Users\Colin\Documents\patching_data\VC test'
+VC_TEST_OUTPUT_FILE = r'C:\Users\Colin\Documents\patching_data\VC test\VC test GC juvenile Scn1a.csv'
 
 if os.path.isdir(ABF_LOCATION):
     abf_files = [os.path.join(ABF_LOCATION, f) for f in os.listdir(ABF_LOCATION) if f.endswith('.abf')]

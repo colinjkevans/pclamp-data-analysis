@@ -2,9 +2,9 @@ import os
 from pyabf import ABF
 from analyze_abf import CurrentStepsData
 
-ABF_LOCATION = r'C:\Users\mattisj\Desktop\9-Patching\GC adult Scn1a\IC steps'
-CURRENT_VS_APS_OUTPUT_FILE = r'C:\Users\mattisj\Desktop\9-Patching\GC adult Scn1a\current_vs_aps.csv'
-ANALYSIS_OUTPUT_FILE = r'C:\Users\mattisj\Desktop\9-Patching\GC adult Scn1a\IC steps GC adult Scn1a.csv'
+ABF_LOCATION = r'C:\Users\Colin\Documents\patching_data\IC steps'
+CURRENT_VS_APS_OUTPUT_FILE = r'C:\Users\Colin\Documents\patching_data\IC steps\current_vs_aps.csv'
+ANALYSIS_OUTPUT_FILE = r'C:\Users\Colin\Documents\patching_data\IC steps\IC steps GC adult Scn1a.csv'
 
 # RHEOBASE_OUTPUT_FILE = r'C:\Users\mattisj\Desktop\9-Patching\GC adult WT\rheobase.csv'
 
@@ -45,12 +45,12 @@ for filepath in abf_files:
     ap_half_width_output[filename] = experiment.get_ap_half_width()
     ap_amplitude_output[filename] = experiment.get_ap_amplitude()
     ap_rise_time_output[filename] = experiment.get_ap_rise_time()
-    ap_threshold_1_output[filename] = experiment.get_ap_threshold_1()
+    ap_threshold_1_output[filename] = experiment.get_ap_threshold()
 
     # characteristics of spike train
     rheobase_output[filename] = experiment.get_rheobase()
     max_instantaneous_firing_frequency_output[filename] = experiment.get_max_instantaneous_firing_frequency()
-    max_steady_state_firing_frequency_output[filename] = experiment.get_max_steady_state_firing_frequency(verify=True)
+    max_steady_state_firing_frequency_output[filename] = experiment.get_max_steady_state_firing_frequency()
     spike_frequency_adaptation_output[filename] = experiment.get_spike_frequency_adaptation()
 
 # Writing the % spikes per current step data to output file

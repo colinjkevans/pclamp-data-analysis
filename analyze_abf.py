@@ -503,7 +503,7 @@ class EToIRatioSweep(Sweep):
         if verify:
             verification_plot()
 
-        return peak[0], peak[1]
+        return peak[0] - first_input_time, peak[1]
 
 
 class ExperimentData(object):
@@ -1051,16 +1051,17 @@ def get_file_list(abf_location):
 
 
 if __name__ == '__main__':
-    filename = '20225026.abf'
-    abf = ABF(filename)
-    experiment = EToIRatioData(abf, input_signal_channel=2)
-    experiment.average_sweeps()
-    for s in experiment.sweeps:
-        p = s.find_first_post_synaptic_potential(verify=True)
+    #filename = '20225026.abf'
+    for filename in get_file_list('.'):
+        abf = ABF(filename)
+        experiment = EToIRatioData(abf, input_signal_channel=2)
+        experiment.average_sweeps()
+        for s in experiment.sweeps:
+            p = s.find_first_post_synaptic_potential(verify=True)
 
 
-        #p = sweep.find_input_peaks(verify=False)
-        print(p)
+            #p = sweep.find_input_peaks(verify=False)
+            print(p)
 
     # abf_files = get_file_list(ABF_LOCATION)
     # for filename in abf_files:
