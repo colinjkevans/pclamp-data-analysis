@@ -7,10 +7,8 @@ from typing import List
 from pyabf import ABF
 import matplotlib.pyplot as plt
 import numpy as np
-from statistics import mean
 
 from trace_analysis import fit_tophat, find_peaks, get_derivative
-from config import ABF_LOCATION
 from sys import float_info
 
 ABF_FILE_EXTENSION = '.abf'
@@ -125,8 +123,6 @@ class Sweep(object):
             verify=verify)
 
         return peaks
-
-
 
     @lru_cache(maxsize=2)
     def get_output_derivative(self, verify=False):
@@ -605,13 +601,6 @@ class EToIRatioData(ExperimentData):
         )]
 
 
-
-
-
-
-
-
-
 class VCTestData(ExperimentData):
     """Functions to get relevant metrics for 'VC test' experiments"""
     sweeps: List[VCTestSweep]
@@ -857,7 +846,7 @@ class CurrentStepsData(ExperimentData):
         for i, sweep in enumerate(self.sweeps):
             try:
                 sweep_max_freq, max_freq_ap_num = sweep.get_max_instantaneous_ap_frequency()
-            except InvalidSweep as e:
+            except InvalidSweep:
                 continue
 
             if sweep_max_freq > max_frequency:
