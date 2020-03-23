@@ -3,8 +3,8 @@ from pyabf import ABF
 from analyze_abf import CurrentClampGapFreeData
 import numpy as np
 
-ABF_LOCATION = r'C:\Users\Colin\Documents\patching_data\IC gap free'
-IC_GAP_FREE_OUTPUT_FILE = r'C:\Users\Colin\Documents\patching_data\IC gap free\IC gap free GC juvenile Scn1a.csv'
+ABF_LOCATION = r'C:\Users\mattisj\Desktop\9-Patching\GC juvenile Scn1a\IC gap free'
+IC_GAP_FREE_OUTPUT_FILE = r'C:\Users\mattisj\Desktop\9-Patching\GC juvenile Scn1a\IC gap free GC juvenile Scn1a.csv'
 
 if os.path.isdir(ABF_LOCATION):
     abf_files = [os.path.join(ABF_LOCATION, f) for f in os.listdir(ABF_LOCATION) if f.endswith('.abf')]
