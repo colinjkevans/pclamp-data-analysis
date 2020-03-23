@@ -478,6 +478,9 @@ class EToIRatioSweep(Sweep):
             plt.axvline(x=search_range_start_t, color='yellow')
             plt.axvline(x=search_range_end_t, color='yellow')
 
+            # Show baseline output
+            plt.axhline(y=baseline_value, color='blue')
+
             plt.show()
 
         # Times of input signals
@@ -489,7 +492,6 @@ class EToIRatioSweep(Sweep):
         search_range = zip(
             self.time_steps[input_pulses[0][0]:input_pulses[1][0]],
             self.output_signal[input_pulses[0][0]:input_pulses[1][0]])
-        search_range = list(search_range)
 
         # Ignore the first 5ms after input signal and last 5ms before next
         # input signal, to avoid artifacts
@@ -500,10 +502,16 @@ class EToIRatioSweep(Sweep):
         search_range_end_t = search_range[-1][0]
         peak = max(search_range, key=lambda x: abs(x[1]))
 
+        # Find baseline output value
+        baseline_end_t = first_input_time - post_pulse_artifact
+        baseline_end_t_step = min(self.time_steps, key=lambda x: abs(x - baseline_end_t))
+        baseline_end_idx = np.where(self.time_steps == baseline_end_t_step)[0][0]
+        baseline_value = np.mean(self.output_signal[:baseline_end_idx])
+
         if verify:
             verification_plot()
 
-        return peak[0] - first_input_time, peak[1]
+        return peak[0] - first_input_time, peak[1] - baseline_value
 
 
 class ExperimentData(object):
