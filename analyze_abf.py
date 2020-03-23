@@ -7,6 +7,7 @@ from typing import List
 from pyabf import ABF
 import matplotlib.pyplot as plt
 import numpy as np
+from statistics import mean
 
 from trace_analysis import fit_tophat, find_peaks, get_derivative
 from config import ABF_LOCATION
@@ -561,6 +562,45 @@ class EToIRatioData(ExperimentData):
     def _sweep(self, *args, **kwargs):
         return EToIRatioSweep(*args, **kwargs)
 
+    def average_sweeps(self, verify=False):
+        """
+
+        :return:
+        """
+        def verification_plot():
+            plt.close('all')
+            fig, ax1 = plt.subplots()
+            ax1.plot(t_steps, inp, color='red')
+            ax2 = ax1.twinx()
+            ax2.plot(t_steps, outp)
+            plt.show()
+
+        inp = np.mean([sweep.input_signal for sweep in self.sweeps], axis=0)
+        outp = np.mean([sweep.output_signal for sweep in self.sweeps], axis=0)
+        t_steps = self.sweeps[0].time_steps
+
+        # Verify all timesteps are the same
+        for sweep in self.sweeps:
+            assert np.array_equal(t_steps, sweep.time_steps)
+
+        if verify:
+            verification_plot()
+
+        self.sweeps = [self._sweep(
+            t_steps,
+            inp,
+            outp,
+            self.sweeps[0].time_steps_units,
+            self.sweeps[0].input_signal_units,
+            self.sweeps[0].output_signal_units,
+            '{}_{}'.format(self.filename[:-4], 'mean')
+        )]
+
+
+
+
+
+
 
 
 
@@ -1014,8 +1054,9 @@ if __name__ == '__main__':
     filename = '20225026.abf'
     abf = ABF(filename)
     experiment = EToIRatioData(abf, input_signal_channel=2)
-    for sweep in experiment.sweeps:
-        p = sweep.find_first_post_synaptic_potential(verify=True)
+    experiment.average_sweeps()
+    for s in experiment.sweeps:
+        p = s.find_first_post_synaptic_potential(verify=True)
 
 
         #p = sweep.find_input_peaks(verify=False)
