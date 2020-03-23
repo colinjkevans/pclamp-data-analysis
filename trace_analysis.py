@@ -7,28 +7,8 @@ import os.path
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.WARNING)
 
-VERIFICATION_DIR = 'verification'
 
-
-def verify_offline(plot, filename, verification_dir=VERIFICATION_DIR):
-    """
-    TODO move this into Sweep class?
-    Write a plot to disk showing output of trace analysis for verification.
-    The file will be output to verification/filename
-
-    :param plot: a matplotlib pyplot
-    :param filename: filename of verification file
-    :return: None
-    """
-    if not os.path.isdir(verification_dir):
-        os.mkdir(verification_dir)
-
-    filepath = os.path.join(verification_dir, filename)
-    logger.info('Saving verification plot to {}'.format(filepath))
-    plot.savefig(filepath)
-
-
-def fit_tophat(x, y, verify=False, verify_file='verfication.png'):
+def fit_tophat(x, y, verify=False):
     """
     Fit the x and y data to a tophat function, returning:
     base_level - the y-value inside the tophat
@@ -71,10 +51,7 @@ def fit_tophat(x, y, verify=False, verify_file='verfication.png'):
         plt.figure(figsize=(8, 5))
         plt.plot(x, y)
         plt.plot(x, top_hat(x, base_level, hat_level, hat_start, hat_end))
-        if verify == 'offline':
-            verify_offline(plt, verify_file)
-        else:
-            plt.show()
+        plt.show()
 
     return base_level, hat_level, hat_start, hat_end
 
