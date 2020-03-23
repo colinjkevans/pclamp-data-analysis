@@ -109,6 +109,25 @@ class Sweep(object):
         return peaks
 
     @lru_cache(maxsize=2)
+    def find_input_peaks(self, threshold=1, verify=False):
+        """
+        Find the peaks in the input and return a list of (t, V) values
+
+        :param threshold:
+        :param verify:
+        :return:
+        """
+        peaks = find_peaks(
+            self.time_steps,
+            self.input_signal,
+            threshold=threshold,
+            verify=verify)
+
+        return peaks
+
+
+
+    @lru_cache(maxsize=2)
     def get_output_derivative(self, verify=False):
         """
         return d/dt values of output signal. List indices correspond to
@@ -430,10 +449,66 @@ class VCTestSweep(Sweep):
         return resistance
 
 
+class EToIRatioSweep(Sweep):
+    """Functions to extract relevant data from an EtoIRatio sweep"""
+    def find_first_post_synaptic_potential(self, post_pulse_artifact=0.005, verify=False):
+        """
+        Peak in absloute output after stimulation.
+
+
+        :return: time, value of the post synaptic peak
+        """
+        def verification_plot():
+            plt.figure(figsize=(32, 20))
+            plt.close('all')
+            plot_idx_padding = input_pulses[1][0] - input_pulses[0][0]
+            plot_idx_start = input_pulses[0][0] - plot_idx_padding
+            plot_idx_end = input_pulses[-1][0] + plot_idx_padding
+
+            plt.plot(
+                self.time_steps[plot_idx_start:plot_idx_end],
+                self.output_signal[plot_idx_start:plot_idx_end])
+
+            # Show peak position
+            plt.axvline(x=peak[0], color='red')
+            plt.axhline(y=peak[1], color='red')
+
+            # Show search range for peak
+            plt.axvline(x=search_range_start_t, color='yellow')
+            plt.axvline(x=search_range_end_t, color='yellow')
+
+            plt.show()
+
+        # Times of input signals
+        input_pulses = self.find_input_peaks()
+        first_input_time = input_pulses[0][1]
+        second_input_time = input_pulses[1][1]
+
+        # Find the range between the first input pulse and second.
+        search_range = zip(
+            self.time_steps[input_pulses[0][0]:input_pulses[1][0]],
+            self.output_signal[input_pulses[0][0]:input_pulses[1][0]])
+        search_range = list(search_range)
+
+        # Ignore the first 5ms after input signal and last 5ms before next
+        # input signal, to avoid artifacts
+        search_range = [d for d in search_range if (d[0] > first_input_time + post_pulse_artifact) and (d[0] < second_input_time - post_pulse_artifact)]
+
+        # Search for max absolute value
+        search_range_start_t = search_range[0][0]
+        search_range_end_t = search_range[-1][0]
+        peak = max(search_range, key=lambda x: abs(x[1]))
+
+        if verify:
+            verification_plot()
+
+        return peak[0], peak[1]
+
+
 class ExperimentData(object):
     """The set of traces in one abf file (a colloquial, not mathematical set)"""
 
-    def __init__(self, abf):
+    def __init__(self, abf, input_signal_channel=1, output_signal_channel=0):
         """
 
         :param abf: The abf file, as loaded by pyabf
@@ -447,11 +522,11 @@ class ExperimentData(object):
         # Extract all the sweeps into
         self.sweeps = []
         for sweep_num in self.abf.sweepList:
-            self.abf.setSweep(sweep_num, channel=1)
+            self.abf.setSweep(sweep_num, channel=input_signal_channel)
             input_signal = self.abf.sweepY
             input_signal_units = self.abf.sweepUnitsY
 
-            self.abf.setSweep(sweep_num, channel=0)
+            self.abf.setSweep(sweep_num, channel=output_signal_channel)
             output_signal_units = self.abf.sweepUnitsY
             output_signal = self.abf.sweepY
 
@@ -479,6 +554,16 @@ class ExperimentData(object):
         ))
 
 
+class EToIRatioData(ExperimentData):
+    """Functions to get relevant metrics for 'E to I ratio' experiments"""
+    sweeps: List[EToIRatioSweep]
+
+    def _sweep(self, *args, **kwargs):
+        return EToIRatioSweep(*args, **kwargs)
+
+
+
+
 class VCTestData(ExperimentData):
     """Functions to get relevant metrics for 'VC test' experiments"""
     sweeps: List[VCTestSweep]
@@ -496,6 +581,9 @@ class VCTestData(ExperimentData):
         resistances = []
         for sweep in self.sweeps:
             resistances.append(sweep.get_input_resistance())
+
+        if verify:
+            raise NotImplementedError
 
         return resistances
 
@@ -923,17 +1011,26 @@ def get_file_list(abf_location):
 
 
 if __name__ == '__main__':
+    filename = '20225026.abf'
+    abf = ABF(filename)
+    experiment = EToIRatioData(abf, input_signal_channel=2)
+    for sweep in experiment.sweeps:
+        p = sweep.find_first_post_synaptic_potential(verify=True)
 
-    abf_files = get_file_list(ABF_LOCATION)
-    for filename in abf_files:
-        logger.info('Filename: {}'.format(filename))
-        abf = ABF(filename)
+
+        #p = sweep.find_input_peaks(verify=False)
+        print(p)
+
+    # abf_files = get_file_list(ABF_LOCATION)
+    # for filename in abf_files:
+    #     logger.info('Filename: {}'.format(filename))
+    #     abf = ABF(filename)
         # for field in dir(abf):
         #     print('#################### {}'.format(field))
         #     exec('print(abf.{})'.format(field))
 
         ############################   CURRENT STEPS
-        experiment = CurrentStepsData(abf)
+        # experiment = CurrentStepsData(abf)
         # for sweep in experiment.sweeps:
         #     sweep.show_plot()
 
@@ -965,20 +1062,20 @@ if __name__ == '__main__':
         ############################   \CURRENT STEPS
 
         ############################   VC TEST
-        experiment = VCTestData(abf)
-        print('time units: {}, input units: {}, output units: {}'.format(
-            experiment.sweeps[0].time_steps_units,
-            experiment.sweeps[0].input_signal_units,
-            experiment.sweeps[0].output_signal_units
-        ))
-        input_resistances = experiment.get_input_resistance()
-        print('Input resistances: {}'.format(input_resistances))
-        print('Input resistance is {} {}/{}'.format(
-            np.mean(input_resistances),
-            experiment.sweeps[0].input_signal_units,
-            experiment.sweeps[0].output_signal_units
-        ))
-        print('mV / pA is GOhm')
+        # experiment = VCTestData(abf)
+        # print('time units: {}, input units: {}, output units: {}'.format(
+        #     experiment.sweeps[0].time_steps_units,
+        #     experiment.sweeps[0].input_signal_units,
+        #     experiment.sweeps[0].output_signal_units
+        # ))
+        # input_resistances = experiment.get_input_resistance()
+        # print('Input resistances: {}'.format(input_resistances))
+        # print('Input resistance is {} {}/{}'.format(
+        #     np.mean(input_resistances),
+        #     experiment.sweeps[0].input_signal_units,
+        #     experiment.sweeps[0].output_signal_units
+        # ))
+        # print('mV / pA is GOhm')
         ############################   \VC TEST
 
         ############################   current clamp gap free
