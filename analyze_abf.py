@@ -493,21 +493,21 @@ class EToIRatioSweep(Sweep):
         # input signal, to avoid artifacts
         search_range = [d for d in search_range if (d[0] > first_input_time + post_pulse_artifact) and (d[0] < second_input_time - post_pulse_artifact)]
 
-        # Search for max absolute value
-        search_range_start_t = search_range[0][0]
-        search_range_end_t = search_range[-1][0]
-        peak = max(search_range, key=lambda x: abs(x[1]))
-
         # Find baseline output value
         baseline_end_t = first_input_time - post_pulse_artifact
         baseline_end_t_step = min(self.time_steps, key=lambda x: abs(x - baseline_end_t))
         baseline_end_idx = np.where(self.time_steps == baseline_end_t_step)[0][0]
         baseline_value = np.mean(self.output_signal[:baseline_end_idx])
 
+        # Search for max absolute value
+        search_range_start_t = search_range[0][0]
+        search_range_end_t = search_range[-1][0]
+        peak = max(search_range, key=lambda x: abs(x[1]-baseline_value))
+
         if verify:
             verification_plot()
 
-        return peak[0] - first_input_time, peak[1] - baseline_value
+        return peak[0] - first_input_time, peak[1] - baseline_value, baseline_value
 
 
 class ExperimentData(object):
