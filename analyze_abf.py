@@ -63,8 +63,8 @@ class Sweep(object):
         self.sweep_name = sweep_name
         self.analysis_cache = {}  # TODO replace this with functools.lru_cache
 
-        logger.debug('{} input units {}'.format(sweep_name, input_signal_units))
-        logger.debug('{} output units {}'.format(sweep_name, output_signal_units))
+        # logger.debug('{} input units {}'.format(sweep_name, input_signal_units))
+        # logger.debug('{} output units {}'.format(sweep_name, output_signal_units))
 
     def __str__(self):
         return 'Data from a single sweep, containing {} data points'.format(len(self.time_steps))
@@ -448,11 +448,22 @@ class VCTestSweep(Sweep):
 
 class EToIRatioSweep(Sweep):
     """Functions to extract relevant data from an EtoIRatio sweep"""
+    # def find_post_synaptic_potential(self, n, post_pulse_artifact, verify=False):
+    #     """
+    #
+    #     :param n: number of
+    #     :param post_pulse_artifact:
+    #     :param verify:
+    #     :return:
+    #     """
+    #
+
     def find_first_post_synaptic_potential(self, post_pulse_artifact=0.005, verify=False):
         """
-        Peak in absloute output after stimulation.
+        Peak in absolute output after stimulation.
 
-
+        :param post_pulse_artifact:
+        :param verify:
         :return: time, value of the post synaptic peak
         """
         def verification_plot():
@@ -508,6 +519,106 @@ class EToIRatioSweep(Sweep):
             verification_plot()
 
         return peak[0] - first_input_time, peak[1] - baseline_value, baseline_value
+
+    def find_total_integrated_current(
+            self, post_pulse_artifact=.001, pre_pulse_artifact=0.0001, tail_length=5, verify=False):
+        """
+
+        :param post_pulse_artifact: Time to ignore after pulse to avoid artifacts
+        :param pre_pulse_artifact: Time to ignore before pulse to avoid artifacts
+        :param tail_length: Multiple of inter-pulse time to continue measurement
+                            after final pulse
+        :return:
+        """
+        def verification_plot():
+            plt.figure(figsize=(32, 20))
+            plt.close('all')
+            plot_idx_padding = input_pulses[1][0] - input_pulses[0][0]
+            plot_idx_start = input_pulses[0][0] - plot_idx_padding
+            plot_idx_end = input_pulses[-1][0] + (tail_length + 1) * plot_idx_padding
+
+            plt.plot(
+                self.time_steps[plot_idx_start:plot_idx_end],
+                self.output_signal[plot_idx_start:plot_idx_end])
+
+            # Integral ranges
+            for start, end in verify_integral_ranges:
+                plt.axvline(x=start, color='C0')
+                plt.axvline(x=end, color='C0')
+
+            # Show baselines used to check for excitatory artifacts
+            for i, baseline_value in enumerate(verify_excitatory_artifact_baselines):
+                input_pulse_t = input_pulses[i][1]
+                plt.axhline(y=baseline_value, color='C{}'.format(i+1))
+                plt.axvline(x=input_pulse_t, color='C{}'.format(i+1))
+
+            plt.show()
+
+        # Times of input signals
+        input_pulses = self.find_input_peaks()
+
+        # Determine if post pulse potential is +ve or -ve
+        first_peak_time, first_peak_value, baseline = \
+            self.find_first_post_synaptic_potential(post_pulse_artifact)
+
+        # Create vars to save some data for a verification plot
+        verify_excitatory_artifact_baselines = []
+        verify_integral_ranges = []
+
+        # Perform integral
+        total_current_integral = 0
+        excitatory_artifact_baseline = baseline
+        for pulse_idx, pulse in enumerate(input_pulses):
+            logger.info('Integrating after pulse {}'.format(pulse_idx))
+            logger.debug('Pulse datapoint index: {}'.format(pulse[0]))
+            verify_excitatory_artifact_baselines.append(excitatory_artifact_baseline)
+
+            # Start the integral dt=post_pulse_artifact after the first pulse
+            integral_start_t = pulse[1] + post_pulse_artifact
+            logger.debug('Integral start time: {}'.format(integral_start_t))
+            for t_idx, t in enumerate(self.time_steps[pulse[0]:]):
+                if t > integral_start_t:
+                    integral_start_idx = pulse[0] + t_idx
+                    logger.debug('Integral start index: {}'.format(integral_start_idx))
+                    break
+
+            # End the integral post_pulse_artifact before the next pulse,
+            # or tail_length*pulse-delta-t after the last pulse
+            if pulse_idx == len(input_pulses) - 1:
+                integral_end_t = pulse[1] + tail_length * (input_pulses[1][1] - input_pulses[0][1])
+            else:
+                integral_end_t = input_pulses[pulse_idx + 1][1] - pre_pulse_artifact
+            logger.debug('Integral end time: {}'.format(integral_end_t))
+
+            for t_idx, t in enumerate(self.time_steps[pulse[0]:]):
+                if t > integral_end_t:
+                    integral_end_idx = pulse[0] + t_idx
+                    logger.debug('Integral end index: {}'.format(integral_end_idx))
+                    break
+
+            verify_integral_ranges.append((integral_start_t, integral_end_t))
+
+            # Derive arrays of time gaps and current-baseline values
+            t_gaps = np.diff(self.time_steps[integral_start_idx:integral_end_idx])
+            i_values = np.subtract(self.output_signal[integral_start_idx:integral_end_idx-1], baseline)
+
+            # If the peak is +ve, set i_values less than baseline to zero to eliminate
+            # artifactorial -ve spike.
+            i_values = i_values.clip(min=excitatory_artifact_baseline)
+
+            # Set the artifact baseline for the next pulse
+            excitatory_artifact_baseline = np.mean(self.output_signal[integral_end_idx-100:integral_end_idx])
+
+            current_integral = np.dot(t_gaps, i_values)
+            logger.debug('Pulse {} integral = {}'.format(pulse_idx, current_integral))
+
+            total_current_integral += current_integral
+
+        if verify:
+            verification_plot()
+
+        return total_current_integral
+
 
 
 class ExperimentData(object):
@@ -1054,11 +1165,10 @@ if __name__ == '__main__':
         experiment = EToIRatioData(abf, input_signal_channel=2)
         experiment.average_sweeps()
         for s in experiment.sweeps:
-            p = s.find_first_post_synaptic_potential(verify=True)
-
-
+            #p = s.find_first_post_synaptic_potential(verify=True)
+            q = s.find_total_integrated_current()
             #p = sweep.find_input_peaks(verify=False)
-            print(p)
+            print(q)
 
     # abf_files = get_file_list(ABF_LOCATION)
     # for filename in abf_files:
