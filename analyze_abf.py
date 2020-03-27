@@ -566,7 +566,7 @@ class EToIRatioSweep(Sweep):
         verify_integral_ranges = []
 
         # Perform integral
-        total_current_integral = 0
+        pulse_current_integrals = []
         excitatory_artifact_baseline = baseline
         for pulse_idx, pulse in enumerate(input_pulses):
             logger.info('Integrating after pulse {}'.format(pulse_idx))
@@ -612,12 +612,12 @@ class EToIRatioSweep(Sweep):
             current_integral = np.dot(t_gaps, i_values)
             logger.debug('Pulse {} integral = {}'.format(pulse_idx, current_integral))
 
-            total_current_integral += current_integral
+            pulse_current_integrals.append(current_integral)
 
         if verify:
             verification_plot()
 
-        return total_current_integral
+        return tuple(pulse_current_integrals)
 
 
 
