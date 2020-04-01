@@ -521,13 +521,13 @@ class EToIRatioSweep(Sweep):
         return peak[0] - first_input_time, peak[1] - baseline_value, baseline_value
 
     def find_total_integrated_current(
-            self, post_pulse_artifact=.001, pre_pulse_artifact=0.0001, tail_length=5, verify=False):
+            self, integration_interval=.04, post_pulse_artifact=.001, verify=False):
         """
 
         :param post_pulse_artifact: Time to ignore after pulse to avoid artifacts
-        :param pre_pulse_artifact: Time to ignore before pulse to avoid artifacts
-        :param tail_length: Multiple of inter-pulse time to continue measurement
-                            after final pulse
+        :param integration_interval: Interval over which to integrate current
+                                     (measured from pulse_time, not from pulse_time+post_pulse_artifact)
+        :param verify: Show verification plot
         :return:
         """
         def verification_plot():
@@ -535,7 +535,7 @@ class EToIRatioSweep(Sweep):
             plt.close('all')
             plot_idx_padding = input_pulses[1][0] - input_pulses[0][0]
             plot_idx_start = input_pulses[0][0] - plot_idx_padding
-            plot_idx_end = input_pulses[-1][0] + (tail_length + 1) * plot_idx_padding
+            plot_idx_end = input_pulses[-1][0] + 6 * plot_idx_padding
 
             plt.plot(
                 self.time_steps[plot_idx_start:plot_idx_end],
@@ -584,10 +584,7 @@ class EToIRatioSweep(Sweep):
 
             # End the integral post_pulse_artifact before the next pulse,
             # or tail_length*pulse-delta-t after the last pulse
-            if pulse_idx == len(input_pulses) - 1:
-                integral_end_t = pulse[1] + tail_length * (input_pulses[1][1] - input_pulses[0][1])
-            else:
-                integral_end_t = input_pulses[pulse_idx + 1][1] - pre_pulse_artifact
+            integral_end_t = pulse[1] + integration_interval
             logger.debug('Integral end time: {}'.format(integral_end_t))
 
             for t_idx, t in enumerate(self.time_steps[pulse[0]:]):
@@ -618,7 +615,6 @@ class EToIRatioSweep(Sweep):
             verification_plot()
 
         return tuple(pulse_current_integrals)
-
 
 
 class ExperimentData(object):
@@ -1159,14 +1155,14 @@ def get_file_list(abf_location):
 
 
 if __name__ == '__main__':
-    #filename = '20225026.abf'
-    for filename in get_file_list('.'):
-        abf = ABF(filename)
+    dir = r'.\debug'
+    for filename in get_file_list(dir):
+        abf = ABF(os.path.join(dir, filename))
         experiment = EToIRatioData(abf, input_signal_channel=2)
         experiment.average_sweeps()
         for s in experiment.sweeps:
             #p = s.find_first_post_synaptic_potential(verify=True)
-            q = s.find_total_integrated_current()
+            q = s.find_total_integrated_current(integration_interval=0.02, verify=True)
             #p = sweep.find_input_peaks(verify=False)
             print(q)
 
