@@ -448,20 +448,38 @@ class VCTestSweep(Sweep):
 
 class EToIRatioSweep(Sweep):
     """Functions to extract relevant data from an EtoIRatio sweep"""
-    # def find_post_synaptic_potential(self, n, post_pulse_artifact, verify=False):
-    #     """
-    #
-    #     :param n: number of
-    #     :param post_pulse_artifact:
-    #     :param verify:
-    #     :return:
-    #     """
-    #
 
-    def find_first_post_synaptic_potential(self, post_pulse_artifact=0.005, verify=False):
+    def _find_pulse_baseline(self, n, pre_pulse_artifact=0.0005):
+        """
+
+        :param n:
+        :return:
+        """
+        if n == 1:
+            # Baseline for first pulse is start of trace to input time - padding time
+            baseline_end_t = self.find_input_peaks()[0][1] - pre_pulse_artifact
+            baseline_end_t_step = min(self.time_steps, key=lambda x: abs(x - baseline_end_t))
+            baseline_end_idx = np.where(self.time_steps == baseline_end_t_step)[0][0]
+            baseline_value = np.mean(self.output_signal[:baseline_end_idx])
+        else:
+            # Baseline for subsequent pulses is average of a number of timesteps preceding the next peak
+            pulse_t = self.find_input_peaks()[n-1][1]
+            pulse_idx = self.find_input_peaks()[n-1][0]
+            for t in self.time_steps[pulse_idx::-1]:
+                if t < pulse_t - pre_pulse_artifact:
+                    mean_end_idx_arr = np.where(self.time_steps == t)
+                    assert(len(mean_end_idx_arr[0]) == 1)
+                    mean_end_idx = mean_end_idx_arr[0][0]
+                    break
+            baseline_value = np.mean(self.output_signal[mean_end_idx - 100:mean_end_idx])
+
+        return baseline_value
+
+    def find_post_synaptic_potential(self, n, post_pulse_artifact=0.001, verify=False):
         """
         Peak in absolute output after stimulation.
 
+        :param n: find potential after nth peak
         :param post_pulse_artifact:
         :param verify:
         :return: time, value of the post synaptic peak
@@ -492,23 +510,30 @@ class EToIRatioSweep(Sweep):
 
         # Times of input signals
         input_pulses = self.find_input_peaks()
-        first_input_time = input_pulses[0][1]
-        second_input_time = input_pulses[1][1]
+        input_time = input_pulses[n-1][1]
+        input_idx = input_pulses[n-1][0]
+
+        if n < len(input_pulses):
+            next_input_time = input_pulses[n][1]
+            next_input_index = input_pulses[n][0]
+        elif n == len(input_pulses):
+            # If this is the last input pulse, search for peaks until t + last inter-pulse interval
+            next_input_time = 2*input_pulses[n - 1][1] - input_pulses[n - 2][1]
+            next_input_index = 2*input_pulses[n - 1][0] - input_pulses[n - 2][0]
+        else:
+            raise ValueError('There are less peaks than the requested peak number')
 
         # Find the range between the first input pulse and second.
         search_range = zip(
-            self.time_steps[input_pulses[0][0]:input_pulses[1][0]],
-            self.output_signal[input_pulses[0][0]:input_pulses[1][0]])
+            self.time_steps[input_idx:next_input_index],
+            self.output_signal[input_idx:next_input_index])
 
-        # Ignore the first 5ms after input signal and last 5ms before next
+        # Ignore the first period after input signal and last period before next
         # input signal, to avoid artifacts
-        search_range = [d for d in search_range if (d[0] > first_input_time + post_pulse_artifact) and (d[0] < second_input_time - post_pulse_artifact)]
+        search_range = [d for d in search_range if (d[0] > input_time + post_pulse_artifact) and (d[0] < next_input_time - post_pulse_artifact)]
 
         # Find baseline output value
-        baseline_end_t = first_input_time - post_pulse_artifact
-        baseline_end_t_step = min(self.time_steps, key=lambda x: abs(x - baseline_end_t))
-        baseline_end_idx = np.where(self.time_steps == baseline_end_t_step)[0][0]
-        baseline_value = np.mean(self.output_signal[:baseline_end_idx])
+        baseline_value = self._find_pulse_baseline(n)
 
         # Search for max absolute value
         search_range_start_t = search_range[0][0]
@@ -518,7 +543,7 @@ class EToIRatioSweep(Sweep):
         if verify:
             verification_plot()
 
-        return peak[0] - first_input_time, peak[1] - baseline_value, baseline_value
+        return peak[0] - input_time, peak[1] - baseline_value, baseline_value
 
     def find_total_integrated_current(
             self, integration_interval=.04, post_pulse_artifact=.001, verify=False):
@@ -1155,16 +1180,17 @@ def get_file_list(abf_location):
 
 
 if __name__ == '__main__':
-    dir = r'.\debug'
+    dir = r'.'
     for filename in get_file_list(dir):
         abf = ABF(os.path.join(dir, filename))
         experiment = EToIRatioData(abf, input_signal_channel=2)
         experiment.average_sweeps()
         for s in experiment.sweeps:
             #p = s.find_first_post_synaptic_potential(verify=True)
-            q = s.find_total_integrated_current(integration_interval=0.02, verify=True)
+            #p = s.find_total_integrated_current(integration_interval=0.02, verify=True)
             #p = sweep.find_input_peaks(verify=False)
-            print(q)
+            p = s.find_post_synaptic_potential(4, verify=True)
+            print(p)
 
     # abf_files = get_file_list(ABF_LOCATION)
     # for filename in abf_files:
