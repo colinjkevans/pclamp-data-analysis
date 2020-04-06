@@ -448,17 +448,6 @@ class VCTestSweep(Sweep):
 
 class EToIRatioSweep(Sweep):
     """Functions to extract relevant data from an EtoIRatio sweep"""
-    # def find_post_synaptic_potential(self, n, post_pulse_artifact, verify=False):
-    #     """
-    #
-    #     :param n: number of
-    #     :param post_pulse_artifact:
-    #     :param verify:
-    #     :return:
-    #     """
-    #
-
-    #def find_fist_post_synaptic_potential(self, post_pulse_artifact=0.005, verify=False):
 
     def _find_pulse_baseline(self, n, pre_pulse_artifact=0.0005):
         """
